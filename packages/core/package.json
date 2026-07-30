@@ -7,7 +7,7 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "echo \"no tests yet\""
+    "test": "node --test"
   },
   "dependencies": {
     "better-sqlite3": "^13.0.2",
