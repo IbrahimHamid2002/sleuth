@@ -58,6 +58,7 @@ These rules are **mandatory** and must be verified before any task is marked com
 
 ```markdown
 ## [YYYY-MM-DD HH:MM] Task: <short task title>
+**User Prompt:** <paste the exact user prompt here as-is>
 **Goal:** <one sentence — what this prompt was trying to achieve>
 **Files Changed:** `path/to/file1.ts`, `path/to/file2.ts`
 **How It Was Achieved:** <2-4 sentences describing the approach taken, 

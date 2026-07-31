@@ -186,6 +186,14 @@ Signatures checked: `app.listen(`, `createServer(`, `ReactDOM.createRoot(`, `Rea
 
 Rationale: Filenames like `index.ts` are ambiguous and appear dozens of times in a typical repo. Detecting the actual bootstrap call is unambiguous and deterministic.
 
+#### Ad-Hoc Multi-Package Detection & Per-Sub-Project Entry Points
+
+Not every multi-package repository is wired up via formal monorepo tooling (`pnpm-workspace.yaml`, `turbo.json`, root `package.json.workspaces`). `detectFrameworks()` also detects **ad-hoc** multi-package repos — any top-level folder (regardless of name: `backend`/`frontend`, `client`/`server`, `api`/`web`, or otherwise) that directly contains its own `package.json` — by scanning every top-level directory at depth 1 when no formal monorepo markers are present. Each such folder becomes a `SubProjectProfile` (`rootRelativePath`, `frameworks`, `packageManager`, `entryPoints`), and `RepoMeta.monorepoType` is set to `'workspace'`, `'ad-hoc'`, or `'none'` accordingly.
+
+Entry point detection is performed per-sub-project by attributing each discovered file to its owning sub-project via path-prefix matching against `subProjects[].rootRelativePath`, then running the same signature-based scan (`app.listen(`, `ReactDOM.createRoot(`, etc.) independently within each sub-project's file subset. This ensures a split repository (regardless of folder naming — `backend`/`frontend`, `client`/`server`, `api`/`web`, or otherwise) produces distinct, correctly-attributed entry points per sub-project rather than a single ambiguous flat list, enabling accurate per-project onboarding instructions in later documentation stages. A sub-project with zero detected entry points (e.g. a shared library package with no runtime bootstrap) is valid and not treated as an error.
+
+Because framework detection runs before file discovery in the pipeline order (see Section 7), `subProjects[].entryPoints` is always `[]` immediately after `detectFrameworks()` returns — it is populated afterward, once file contents exist, by writing `detectEntryPoints()`'s per-sub-project results back onto the `subProjects` array. The flat, repo-wide `EntryPointBonus` scoring above is unaffected: it continues to use the union of all sub-projects' entry points (`detectEntryPoints()`'s `global` set), so a file still gets the flat `+30` bonus regardless of which sub-project it belongs to.
+
 ### 4.4 Selection
 
 ```text
