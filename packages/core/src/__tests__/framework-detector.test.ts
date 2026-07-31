@@ -97,7 +97,9 @@ describe('detectFrameworks', () => {
       frameworks: [],
       packageManager: 'npm',
       isMonorepo: false,
+      monorepoType: 'none',
       workspaceDirs: [],
+      subProjects: [],
     });
   });
 
