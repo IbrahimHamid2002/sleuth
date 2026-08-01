@@ -158,13 +158,23 @@ export class GeminiProvider implements LLMProvider {
   }
 }
 
-export function createProviderChain(): LLMProvider[] {
-  const providers: LLMProvider[] = [];
+const GROQ_ROLE_MODELS: Record<'summarizer' | 'synthesizer', string> = {
+  summarizer: 'llama-3.1-8b-instant',
+  synthesizer: 'llama-3.3-70b-versatile',
+};
 
-  if (process.env.GROQ_SUMMARIZER_API_KEY !== undefined) {
-    providers.push(new GroqProvider('llama-3.1-8b-instant'));
+// `role` picks which Groq model/key this chain is for — summarization and
+// synthesis must NOT share one chain, or synthesis silently gets routed
+// through the summarizer's 8B key instead of the synthesizer's 70B key.
+export function createProviderChain(role: 'summarizer' | 'synthesizer' = 'summarizer'): LLMProvider[] {
+  const providers: LLMProvider[] = [];
+  const model = GROQ_ROLE_MODELS[role];
+  const envVarName = GROQ_MODEL_TO_ENV_VAR[model] ?? 'GROQ_SUMMARIZER_API_KEY';
+
+  if (process.env[envVarName] !== undefined) {
+    providers.push(new GroqProvider(model));
   } else {
-    console.warn('GROQ_SUMMARIZER_API_KEY is not set — skipping Groq provider');
+    console.warn(`${envVarName} is not set — skipping Groq provider`);
   }
 
   if (process.env.GEMINI_API_KEY !== undefined) {
