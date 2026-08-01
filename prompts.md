@@ -801,3 +801,51 @@ db (':memory:' path) covering:
 Run auto-lint skill. Append entry to prompts.md
 
 ---
+
+## LLM Provider Chain & Rate Limiter
+
+### Goal
+Implement the Groq-primary/Gemini-fallback LLM provider abstraction and a token-bucket rate limiter, with a fetch-mocked dry-run test suite covering retry, fallback, and throttling behavior — no real network calls.
+
+### User Prompt
+Read CLAUDE.md Section 1 (LLM Providers: Groq primary, Gemini fallback,
+free tier only) and PRD.md Section 5 (LLM outputs must be Zod-validated
+by the caller, not this module).
+
+Implement packages/core/src/llm/rate-limiter.ts:
+- export class TokenBucketRateLimiter constructor(maxTokens: number, refillRatePerSecond: number)
+- async waitForToken(): Promise<void> — refills based on elapsed time, consumes one token if available, otherwise waits and retries.
+
+Implement packages/core/src/llm/provider.ts:
+- export interface LLMProvider { name: string; complete(prompt: string, opts: { maxTokens: number; temperature: number }): Promise<string>; }
+- export class GroqProvider implements LLMProvider
+  Uses global fetch() against https://api.groq.com/openai/v1/chat/completions,
+  reads GROQ_SUMMARIZER_API_KEY, GROQ_SYNTHESIZER_API_KEY from process.env, accepts a model name in the constructor (summarizer = 'llama-3.1-8b-instant', synthesizer = 'llama-3.3-70b-versatile'). On HTTP 429, read the
+  retry-after header (or default to 2000ms), wait, retry once. On 5xx,
+  retry up to 3 times with exponential backoff (500ms, 1000ms, 2000ms).
+  Throw a clear error if GROQ_SUMMARIZER_API_KEY or GROQ_SYNTHESIZER_API_KEY is missing at construction time.
+- export class GeminiProvider implements LLMProvider
+  Uses fetch() against
+  https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent,
+  reads GEMINI_API_KEY, default model 'gemini-2.0-flash'. Same retry logic.
+- export function createProviderChain(): LLMProvider[]
+  Returns [GroqProvider instance, GeminiProvider instance], filtering out
+  any whose required API key env var is missing (log a warning, don't throw).
+- export async function callWithFallback(providers: LLMProvider[], prompt:
+  string, opts: { maxTokens: number; temperature: number }, rateLimiters:
+  Map<string, TokenBucketRateLimiter>): Promise<string>
+  Iterates providers in order, awaits the matching rate limiter's
+  waitForToken() before each call, catches errors and moves to the next
+  provider, throws a combined error only if all providers fail.
+
+Write packages/core/src/__tests__/llm-provider.test.ts mocking global
+fetch (do NOT make real API calls in tests):
+- GroqProvider correctly retries on a mocked 429 response
+- callWithFallback falls through to the second provider when the first throws
+- callWithFallback throws a combined error when all providers fail
+- Rate limiter's waitForToken delays appropriately when bucket is empty
+  (use fake timers)
+
+Run auto-lint skill. Append entry to prompts.md
+
+---
