@@ -958,3 +958,51 @@ citation-mapper.test.ts mocking callWithFallback:
 Run auto-lint skill. Append entry to prompts.md
 
 ---
+
+## Core pipeline orchestrator
+
+### Goal
+Implement the fixed, sequential `runPipeline` orchestrator that wires ingestion → framework detection → discovery → import/symbol indexing → prioritization → summarization → synthesis into a single non-agentic flow, with sandbox lifecycle and a global timeout, plus a dry-run test against a small local fixture repo.
+
+### User Prompt
+Read ARCHITECTURE.md Section 7 (Ingestion → Documentation Pipeline Flow)
+and CLAUDE.md Architectural Principle 4 (no agent loops in the pipeline —
+strictly sequential).
+
+Implement packages/core/src/pipeline.ts:
+- export interface PipelineOptions { maxFiles?: number; skipCache?: boolean;
+  onProgress?: (stage: string, detail?: string) => void; }
+- export interface PipelineResult { meta: RepoMeta; summaries: FileSummary[];
+  synthesis: SynthesisResult; symbolIndex: Map<string, Array<{path:string;
+  line:number}>>; auditLog: AuditEntry[]; sandboxPath: string;
+  durationMs: number; }
+- export async function runPipeline(input: RepoInput, options?:
+  PipelineOptions): Promise<PipelineResult>
+  Sequential stages, calling onProgress before each: (1) validate input via
+  RepoInputSchema.parse, (2) createSandbox, (3) ingest — cloneRepo or
+  ingestLocal depending on input.type, (4) detectFrameworks, (5)
+  discoverFiles, (6) buildImportGraph + buildSymbolIndex, (7)
+  detectEntryPoints + prioritizeFiles (respecting options.maxFiles ??
+  150), (8) initialize a SummaryCache instance and summarizeFiles, (9)
+  synthesize, (10) compute durationMs. Wrap the ENTIRE function body in
+  try/catch — on any error, call cleanupSandbox(sandboxPath) before
+  re-throwing (so a failed run never leaks a sandbox). On SUCCESS, do
+  NOT clean up the sandbox — return it in the result so a subsequent Deep
+  Dive session can use it; the caller is responsible for eventual cleanup.
+  Enforce a global 5-minute timeout using AbortController — if exceeded,
+  clean up and throw a clear timeout error.
+
+Write packages/core/src/__tests__/pipeline.test.ts using a small real
+fixture repo (5-10 files) on local disk (input.type = 'local') with ALL
+LLM calls mocked (mock callWithFallback at the module level):
+- Full pipeline run produces meta, summaries, and all 3 synthesis
+  documents
+- auditLog contains entries for each major stage
+- On a forced ingestion failure, verify the sandbox is cleaned up and no
+  orphaned temp directory remains
+- Verify the returned sandboxPath still exists after a successful run
+  (not cleaned up automatically)
+
+Run auto-lint skill. Append entry to prompts.md
+
+---
