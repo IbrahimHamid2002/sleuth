@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { LLMProvider } from '../llm/provider';
-import { callWithFallback, GroqProvider } from '../llm/provider';
+import { callWithFallback, createProviderChain, GroqProvider } from '../llm/provider';
 import { TokenBucketRateLimiter } from '../llm/rate-limiter';
 
 describe('GroqProvider', () => {
@@ -108,5 +108,42 @@ describe('TokenBucketRateLimiter', () => {
     await vi.advanceTimersByTimeAsync(600);
     await waitPromise;
     expect(resolved).toBe(true);
+  });
+});
+
+describe('createProviderChain', () => {
+  const originalSummarizerKey = process.env.GROQ_SUMMARIZER_API_KEY;
+  const originalSynthesizerKey = process.env.GROQ_SYNTHESIZER_API_KEY;
+  const originalGeminiKey = process.env.GEMINI_API_KEY;
+
+  afterEach(() => {
+    process.env.GROQ_SUMMARIZER_API_KEY = originalSummarizerKey;
+    process.env.GROQ_SYNTHESIZER_API_KEY = originalSynthesizerKey;
+    process.env.GEMINI_API_KEY = originalGeminiKey;
+  });
+
+  it('defaults to the summarizer-flavored Groq provider when no role is given', () => {
+    process.env.GROQ_SUMMARIZER_API_KEY = 'summarizer-key';
+    delete process.env.GROQ_SYNTHESIZER_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+
+    expect(createProviderChain()).toHaveLength(1);
+  });
+
+  it('builds a Groq provider from GROQ_SYNTHESIZER_API_KEY for the synthesizer role, independent of the summarizer key', () => {
+    delete process.env.GROQ_SUMMARIZER_API_KEY;
+    process.env.GROQ_SYNTHESIZER_API_KEY = 'synthesizer-key';
+    delete process.env.GEMINI_API_KEY;
+
+    expect(createProviderChain('synthesizer')).toHaveLength(1);
+  });
+
+  it('skips Groq for a role whose key is missing, even when the other role key is set', () => {
+    process.env.GROQ_SUMMARIZER_API_KEY = 'summarizer-key';
+    delete process.env.GROQ_SYNTHESIZER_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+
+    expect(createProviderChain('synthesizer')).toHaveLength(0);
+    expect(createProviderChain('summarizer')).toHaveLength(1);
   });
 });
