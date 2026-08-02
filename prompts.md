@@ -1006,3 +1006,245 @@ LLM calls mocked (mock callWithFallback at the module level):
 Run auto-lint skill. Append entry to prompts.md
 
 ---
+
+## Fix premature LLM fallback to Gemini
+
+### Goal
+Investigate a manual-testing bug report that Gemini was being invoked even when Groq succeeded, identify the true root cause in `llm/provider.ts` from a list of 5 candidate hypotheses, fix it, add regression tests proving the bug is gone, and manually verify against real Groq/Gemini API calls.
+
+### User Prompt
+Read packages/core/src/llm/provider.ts in full before making any changes.
+
+BUG REPORT: During manual pipeline testing, GeminiProvider is being called 
+even when GroqProvider succeeds. The fallback chain should ONLY move to 
+the next provider (Gemini) when the CURRENT provider (Groq) has 
+DEFINITIVELY failed after exhausting its own retries — not on every call, 
+not speculatively, not in parallel, and not due to a false-positive error 
+being misclassified as a failure.
+
+INVESTIGATION STEPS (do these first, before writing any fix):
+
+1. Read the current implementation of callWithFallback() in 
+   packages/core/src/llm/provider.ts line by line and identify exactly 
+   why Gemini is being invoked unnecessarily. Specifically check for 
+   these common root causes and report which one(s) apply:
+
+   a) Is callWithFallback() calling providers in parallel (e.g. via 
+      Promise.all or Promise.race) instead of sequentially trying Groq 
+      first and ONLY calling Gemini if Groq's own try/catch (including 
+      its internal retries) fully exhausts and throws?
+
+   b) Is GroqProvider's complete() method incorrectly throwing/rejecting 
+      on a condition that ISN'T a real failure — for example, throwing 
+      on a successful HTTP 200 response due to a response-parsing bug, 
+      or misinterpreting a valid but slow response as a timeout?
+
+   c) Is the retry logic inside GroqProvider itself broken — e.g. does it 
+      give up after 0 or 1 attempt instead of the intended 3 retries with 
+      exponential backoff, causing premature fallback?
+
+   d) Is there any code path (in summarizer.ts or synthesizer.ts) that 
+      calls callWithFallback() with BOTH providers passed in a way that 
+      causes both to fire regardless of success — e.g. is the providers 
+      array being misused, or is there a leftover Promise.allSettled call 
+      treating every provider as independent rather than as a fallback chain?
+
+   e) Is the rate limiter (rate-limiter.ts) incorrectly blocking/timing 
+      out the Groq call in a way that looks like a failure to 
+      callWithFallback, even though Groq itself never actually errored?
+
+   Print your findings clearly before proceeding to the fix — state 
+   exactly which root cause(s) you found in this specific codebase.
+
+2. After identifying the actual root cause, fix callWithFallback() so 
+   that it behaves STRICTLY as follows:
+
+   - Iterate providers in array order (index 0 = Groq, index 1 = Gemini) 
+     using a plain for-loop or for...of — NEVER Promise.all/allSettled/race 
+     for the fallback logic itself (Promise.allSettled remains correct 
+     ONLY in synthesizer.ts for running the 3 independent document 
+     generations in parallel — that is a SEPARATE, unrelated use of 
+     allSettled and must NOT be touched by this fix).
+
+   - For the CURRENT provider in the loop: await its own waitForToken() 
+     (rate limiter), then call provider.complete(). If this call succeeds 
+     (resolves), IMMEDIATELY return the result — do NOT proceed to the 
+     next provider under any circumstances.
+
+   - Only if provider.complete() THROWS (after that provider's own 
+     internal retry logic — e.g. Groq's 429/5xx retry handling — has been 
+     fully exhausted and it still throws) should the loop catch the error, 
+     log a clear warning like "Groq failed after retries, falling back to 
+     Gemini: {error message}", and proceed to try the NEXT provider in 
+     the array.
+
+   - If ALL providers in the array throw, only then throw a final 
+     combined error listing every provider's failure reason.
+
+   - Add an explicit unit-testable log line right before ANY fallback 
+     provider is attempted: console.warn(\`[LLM Fallback] Provider 
+     "${providers[i-1].name}" failed, attempting "${providers[i].name}"\`) 
+     — this makes it visually obvious in logs/tests whenever a fallback 
+     genuinely occurs, versus the normal silent-success path where no 
+     such log should ever print.
+
+3. If the root cause turns out to be inside GroqProvider's own retry 
+   logic (root cause 'b' or 'c' above), fix that method directly so it: 
+   only throws after genuinely exhausting its 3 retries on 429/5xx 
+   responses, correctly returns/resolves on any 2xx response without 
+   throwing, and does not misclassify normal latency as a failure.
+
+4. UPDATE packages/core/src/__tests__/llm-provider.test.ts to add/fix 
+   these specific regression tests proving the bug is gone:
+
+   - Test: when GroqProvider's complete() resolves successfully on the 
+     FIRST attempt, assert that GeminiProvider.complete() is NEVER called 
+     (use a jest/vitest mock spy and assert toHaveBeenCalledTimes(0) on 
+     the Gemini mock)
+   - Test: when GroqProvider's complete() resolves successfully only 
+     after its OWN internal retry (e.g. first attempt returns a mocked 
+     429, second attempt succeeds), assert GeminiProvider is STILL never 
+     called — proving Groq's internal retries are exhausted before any 
+     fallback decision is made
+   - Test: when GroqProvider's complete() throws even after its own 
+     retries are exhausted, assert GeminiProvider.complete() IS called 
+     exactly once, and its result is returned
+   - Test: when BOTH providers throw, assert the final thrown error 
+     message mentions both provider names/failure reasons
+
+5. Manually verify the fix by adding a temporary console.log inside 
+   GeminiProvider.complete() (or checking your existing rate-limiter 
+   token consumption) and confirm during a real pipeline run 
+   (summarizer + synthesizer) that Gemini's token bucket never depletes 
+   when Groq is healthy — report this confirmation back to me. Remove 
+   any temporary debug logging before finishing.
+
+Run auto-lint skill. Run the full test suite (npm run test --workspaces) and 
+confirm no regressions. Append an entry to prompts.md documenting this 
+fix per the CLAUDE.md format, including which specific root cause (a-e 
+from the investigation step) was actually found in this codebase.
+Read packages/core/src/llm/provider.ts in full before making any changes.
+
+BUG REPORT: During manual pipeline testing, GeminiProvider is being called 
+even when GroqProvider succeeds. The fallback chain should ONLY move to 
+the next provider (Gemini) when the CURRENT provider (Groq) has 
+DEFINITIVELY failed after exhausting its own retries — not on every call, 
+not speculatively, not in parallel, and not due to a false-positive error 
+being misclassified as a failure.
+
+INVESTIGATION STEPS (do these first, before writing any fix):
+
+1. Read the current implementation of callWithFallback() in 
+   packages/core/src/llm/provider.ts line by line and identify exactly 
+   why Gemini is being invoked unnecessarily. Specifically check for 
+   these common root causes and report which one(s) apply:
+
+   a) Is callWithFallback() calling providers in parallel (e.g. via 
+      Promise.all or Promise.race) instead of sequentially trying Groq 
+      first and ONLY calling Gemini if Groq's own try/catch (including 
+      its internal retries) fully exhausts and throws?
+
+   b) Is GroqProvider's complete() method incorrectly throwing/rejecting 
+      on a condition that ISN'T a real failure — for example, throwing 
+      on a successful HTTP 200 response due to a response-parsing bug, 
+      or misinterpreting a valid but slow response as a timeout?
+
+   c) Is the retry logic inside GroqProvider itself broken — e.g. does it 
+      give up after 0 or 1 attempt instead of the intended 3 retries with 
+      exponential backoff, causing premature fallback?
+
+   d) Is there any code path (in summarizer.ts or synthesizer.ts) that 
+      calls callWithFallback() with BOTH providers passed in a way that 
+      causes both to fire regardless of success — e.g. is the providers 
+      array being misused, or is there a leftover Promise.allSettled call 
+      treating every provider as independent rather than as a fallback chain?
+
+   e) Is the rate limiter (rate-limiter.ts) incorrectly blocking/timing 
+      out the Groq call in a way that looks like a failure to 
+      callWithFallback, even though Groq itself never actually errored?
+
+   Print your findings clearly before proceeding to the fix — state 
+   exactly which root cause(s) you found in this specific codebase.
+
+2. After identifying the actual root cause, fix callWithFallback() so 
+   that it behaves STRICTLY as follows:
+
+   - Iterate providers in array order (index 0 = Groq, index 1 = Gemini) 
+     using a plain for-loop or for...of — NEVER Promise.all/allSettled/race 
+     for the fallback logic itself (Promise.allSettled remains correct 
+     ONLY in synthesizer.ts for running the 3 independent document 
+     generations in parallel — that is a SEPARATE, unrelated use of 
+     allSettled and must NOT be touched by this fix).
+
+   - For the CURRENT provider in the loop: await its own waitForToken() 
+     (rate limiter), then call provider.complete(). If this call succeeds 
+     (resolves), IMMEDIATELY return the result — do NOT proceed to the 
+     next provider under any circumstances.
+
+   - Only if provider.complete() THROWS (after that provider's own 
+     internal retry logic — e.g. Groq's 429/5xx retry handling — has been 
+     fully exhausted and it still throws) should the loop catch the error, 
+     log a clear warning like "Groq failed after retries, falling back to 
+     Gemini: {error message}", and proceed to try the NEXT provider in 
+     the array.
+
+   - If ALL providers in the array throw, only then throw a final 
+     combined error listing every provider's failure reason.
+
+   - Add an explicit unit-testable log line right before ANY fallback 
+     provider is attempted: console.warn(\`[LLM Fallback] Provider 
+     "${providers[i-1].name}" failed, attempting "${providers[i].name}"\`) 
+     — this makes it visually obvious in logs/tests whenever a fallback 
+     genuinely occurs, versus the normal silent-success path where no 
+     such log should ever print.
+
+3. If the root cause turns out to be inside GroqProvider's own retry 
+   logic (root cause 'b' or 'c' above), fix that method directly so it: 
+   only throws after genuinely exhausting its 3 retries on 429/5xx 
+   responses, correctly returns/resolves on any 2xx response without 
+   throwing, and does not misclassify normal latency as a failure.
+
+4. UPDATE packages/core/src/__tests__/llm-provider.test.ts to add/fix 
+   these specific regression tests proving the bug is gone:
+
+   - Test: when GroqProvider's complete() resolves successfully on the 
+     FIRST attempt, assert that GeminiProvider.complete() is NEVER called 
+     (use a jest/vitest mock spy and assert toHaveBeenCalledTimes(0) on 
+     the Gemini mock)
+   - Test: when GroqProvider's complete() resolves successfully only 
+     after its OWN internal retry (e.g. first attempt returns a mocked 
+     429, second attempt succeeds), assert GeminiProvider is STILL never 
+     called — proving Groq's internal retries are exhausted before any 
+     fallback decision is made
+   - Test: when GroqProvider's complete() throws even after its own 
+     retries are exhausted, assert GeminiProvider.complete() IS called 
+     exactly once, and its result is returned
+   - Test: when BOTH providers throw, assert the final thrown error 
+     message mentions both provider names/failure reasons
+
+5. Manually verify the fix by adding a temporary console.log inside 
+   GeminiProvider.complete() (or checking your existing rate-limiter 
+   token consumption) and confirm during a real pipeline run 
+   (summarizer + synthesizer) that Gemini's token bucket never depletes 
+   when Groq is healthy — report this confirmation back to me. Remove 
+   any temporary debug logging before finishing.
+
+Run auto-lint skill. Run the full test suite (npm run test --workspaces) and 
+confirm no regressions. Append an entry to prompts.md documenting this 
+fix per the CLAUDE.md format, including which specific root cause (a-e 
+from the investigation step) was actually found in this codebase.
+
+### Root Cause Found
+(c) — `fetchWithRetry()`'s 429 (rate-limit) branch used a one-shot boolean
+flag (`retriedAfterRateLimit`), allowing exactly ONE retry, versus the 5xx
+branch's 3 retries via `SERVER_ERROR_BACKOFFS_MS`. Root causes (a), (b),
+(d), (e) were all ruled out by direct code inspection: `callWithFallback`
+was already a correct sequential `for...of` loop with immediate return on
+success (no `Promise.all`/`race`); `GroqProvider.complete()` only throws on
+a genuinely missing `content` field; `summarizer.ts`/`synthesizer.ts` never
+fire both providers regardless of outcome (synthesizer's `Promise.allSettled`
+runs 3 independent document prompts in parallel, each with its own correct
+sequential Groq→Gemini attempt — not a bug); `TokenBucketRateLimiter.waitForToken()`
+never rejects, only delays, so it cannot be misread as a provider failure.
+
+---
