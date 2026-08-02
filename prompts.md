@@ -1306,3 +1306,77 @@ sandbox directory:
 Run auto-lint skill. Append entry to prompts.md
 
 ---
+
+## Deep Dive ReAct agent — session, prompts, investigator loop
+
+### Goal
+Implement the Deep Dive ReAct agent's session lifecycle (`agent/session.ts`), prompt builders (`agent/prompts.ts`), and the ReAct investigation loop itself (`agent/investigator.ts`) — Planning → Reasoning → Tool Use → Observation → Reflection → Synthesis, bounded by 10 iterations and a 60s timeout — on top of the 5 deterministic tools from the previous task, plus unit tests covering the scripted decision sequence, the 10-iteration cap, malformed-JSON resilience, and the visited-file cache.
+
+### User Prompt
+Read the SESSION_SUMMARY.md file first.
+Then,
+Read PRD.md Section 4.7 in full and ARCHITECTURE.md's flow description
+for the Deep Dive agent (Planning → Reasoning → Tool Use → Observation
+→ Reflection → Synthesis, max 10 iterations, 60s timeout).
+
+Implement packages/core/src/agent/session.ts:
+- export function createSession(repoMeta: RepoMeta, sandboxPath: string,
+  summaries: FileSummary[]): DeepDiveSession
+  Builds summariesMap from the summaries array keyed by path, initializes
+  empty visitedFiles Map, sets createdAt/lastActivityAt to Date.now(),
+  generates sessionId via crypto.randomUUID().
+- export function touchSession(session: DeepDiveSession): void — updates
+  lastActivityAt.
+- export async function terminateSession(session: DeepDiveSession):
+  Promise<void> — clears both Maps, calls cleanupSandbox(session.
+  sandboxPath).
+
+Implement packages/core/src/agent/prompts.ts:
+- export function buildPlanPrompt(question: string, repoMeta: RepoMeta,
+  summaryCount: number): string
+- export function buildReasonPrompt(state: {question:string; plan:string;
+  scratchpad: Array<{thought:string;toolName:string;observation:string}>;
+  iteration:number}, visitedPaths: string[]): string
+  MUST include the "Already examined this session" list of visitedPaths
+  and explicitly instruct: "FIRST check get_file_summary() before
+  read_file(). Do NOT re-read files already in the examined list." MUST
+  instruct the model to respond with ONLY valid JSON matching
+  AgentDecisionSchema.
+- export function buildSynthesisPrompt(state, filesExamined: string[]): string
+  Instructs the model to produce a Markdown answer citing file paths for
+  every claim.
+
+Implement packages/core/src/agent/investigator.ts:
+- export async function investigate(question: string, session:
+  DeepDiveSession, providers: LLMProvider[], rateLimiters: Map<string,
+  TokenBucketRateLimiter>, onEvent?: (event: {type: string; data: any}) =>
+  void): Promise<InvestigationResult>
+  Emit onEvent('planning') before generating the plan via callWithFallback.
+  Loop up to 10 iterations (enforce a 60s AbortController timeout across
+  the WHOLE function): each iteration calls buildReasonPrompt, calls the
+  LLM, parses the response via extractJSON + AgentDecisionSchema.parse
+  (on parse failure, push an error observation and continue rather than
+  crash), emits onEvent('thinking', {thought}). If action === 'finish',
+  break. Otherwise validate toolArgs against the matching schema in
+  ToolArgsSchemas, find the tool in TOOLS by name, execute it with
+  ctx built from session fields, emit onEvent('tool_call', ...) and
+  onEvent('observation', ...), push to scratchpad, call touchSession.
+  After the loop (or early finish), call buildSynthesisPrompt and generate
+  the final answer, emit onEvent('answer', {answer}). Return the full
+  InvestigationResult including reasoningTrace and filesExamined (derived
+  from session.visitedFiles keys touched during this call).
+
+Write packages/core/src/__tests__/investigator.test.ts mocking
+callWithFallback to return scripted decisions:
+- A scripted sequence of 3 tool calls followed by 'finish' produces a
+  scratchpad of exactly 3 entries and a final answer
+- Forcing the LLM to never return 'finish' verifies the loop stops at
+  exactly 10 iterations
+- Malformed JSON on one iteration doesn't crash the loop — it's recorded
+  as an error observation and the loop continues
+- Verify visited-file cache prevents a duplicate fs.readFileSync call
+  when the same file is requested twice across iterations
+
+Run auto-lint skill. Append entry to prompts.md
+
+---
