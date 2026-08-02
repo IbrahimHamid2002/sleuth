@@ -7,15 +7,19 @@ export interface LLMProvider {
 
 const SERVER_ERROR_BACKOFFS_MS = [500, 1000, 2000];
 const DEFAULT_RATE_LIMIT_WAIT_MS = 2000;
+const RATE_LIMIT_MAX_RETRIES = 3;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 // Groq's `retry-after` header follows RFC 7231 (seconds); the ms default above
-// only applies when the header is absent or unparseable.
+// only applies when the header is absent or unparseable. 429 gets the same
+// retry budget as 5xx (3 attempts) — a single retry was too easy to exhaust
+// on Groq's free tier and caused premature fallback to Gemini even when Groq
+// would have succeeded on a second or third attempt.
 async function fetchWithRetry(url: string, init: RequestInit, providerName: string): Promise<Response> {
-  let retriedAfterRateLimit = false;
+  let rateLimitRetries = 0;
   let serverErrorRetries = 0;
 
   for (;;) {
@@ -25,8 +29,8 @@ async function fetchWithRetry(url: string, init: RequestInit, providerName: stri
       return response;
     }
 
-    if (response.status === 429 && !retriedAfterRateLimit) {
-      retriedAfterRateLimit = true;
+    if (response.status === 429 && rateLimitRetries < RATE_LIMIT_MAX_RETRIES) {
+      rateLimitRetries += 1;
 
       const retryAfterHeader = response.headers.get('retry-after');
       const retryAfterSeconds = retryAfterHeader !== null ? Number(retryAfterHeader) : undefined;
@@ -193,8 +197,13 @@ export async function callWithFallback(
   rateLimiters: Map<string, TokenBucketRateLimiter>,
 ): Promise<string> {
   const errors: string[] = [];
+  let previousProviderName: string | undefined;
 
   for (const provider of providers) {
+    if (previousProviderName !== undefined) {
+      console.warn(`[LLM Fallback] Provider "${previousProviderName}" failed, attempting "${provider.name}"`);
+    }
+
     try {
       const limiter = rateLimiters.get(provider.name);
 
@@ -207,6 +216,7 @@ export async function callWithFallback(
       const message = err instanceof Error ? err.message : String(err);
 
       errors.push(`${provider.name}: ${message}`);
+      previousProviderName = provider.name;
     }
   }
 
