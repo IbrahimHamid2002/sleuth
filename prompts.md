@@ -1380,3 +1380,266 @@ callWithFallback to return scripted decisions:
 Run auto-lint skill. Append entry to prompts.md
 
 ---
+
+## Tighten Groq/Gemini free-tier RPM safety buffer
+
+### Goal
+Add a small safety margin below the actual Groq/Gemini free-tier request-per-minute ceilings so the local rate limiters never pace requests right up against the real limit, without touching any batching/call-count logic.
+
+### User Prompt
+Read packages/core/src/llm/rate-limiter.ts and packages/core/src/llm/provider.ts.
+
+Make these two small changes only:
+
+1. In the file where Groq's rate limit is configured (likely where 
+   TokenBucketRateLimiter is instantiated for Groq — could be in 
+   provider.ts inside createProviderChain or wherever the Groq rate 
+   limiter is created): change the RPM value from 30 to 28.
+
+2. In the same location where Gemini's rate limit is configured: 
+   change the RPM value from 15 to 13.
+
+These are safety buffers so we never touch the real free-tier API 
+limits exactly. Total call counts and batching logic must NOT change 
+— only the pacing/speed between calls gets slightly more conservative.
+
+Do NOT change any other logic in rate-limiter.ts or provider.ts. 
+Do NOT touch summarizer.ts, synthesizer.ts, or any other file.
+
+Run lint --fix on the changed files only. 
+Append an entry to prompts.md per the CLAUDE.md format.
+
+---
+
+## Speed up Deep Dive agent: dedicated key, dual models, fewer/cheaper calls
+
+### Goal
+Cut Deep Dive agent latency and LLM quota usage by giving it its own dedicated Groq key, routing planning/reasoning through a fast 8B model while reserving the 70B model for the final synthesis answer, shrinking reasoning token budgets, lowering the iteration cap from 10 to 6, merging the planning call into iteration 1's first decision, and rewriting every agent prompt for 8B-model reliability.
+
+### User Prompt
+Read PRD.md Section 4.7 and ARCHITECTURE.md's Deep Dive Agent description, 
+along with the current implementation of packages/core/src/llm/provider.ts, 
+packages/core/src/agent/investigator.ts, and packages/core/src/agent/prompts.ts.
+
+GOAL: Speed up the Deep Dive agent by (1) using a fast 8B model for 
+planning/reasoning steps and reserving the smarter 70B model only for the 
+final synthesis answer, (2) reducing max_tokens on reasoning calls since 
+they only need to return a small JSON decision, and (3) lowering the max 
+iteration cap from 10 to 6. Additionally, the agent must use its OWN 
+dedicated Groq API key — separate from the summarization and synthesis 
+keys already used elsewhere in the pipeline — since a new dedicated Groq 
+account/key has been created specifically for the Deep Dive agent.
+
+---
+
+1. UPDATE .env.example:
+
+Add a new variable:
+  GROQ_DEEP_DIVE_AGENT_API_KEY=
+
+Keep the existing GROQ_API_KEY_SUMMARIZATION and GROQ_API_KEY_SYNTHESIS 
+variables unchanged.
+
+---
+
+2. UPDATE packages/core/src/llm/provider.ts:
+
+Confirm/update createProviderChain() (or wherever provider chains are 
+built) so it accepts a parameter indicating WHICH env var to read the 
+Groq key from, and WHICH model to use. If this function currently only 
+supports building one type of chain, refactor it into something like:
+
+  export function createProviderChain(config: {
+    groqApiKeyEnvVar: string;
+    groqModel: string;
+    geminiApiKeyEnvVar?: string;   // default to GEMINI_API_KEY if not provided
+    geminiModel?: string;
+  }): LLMProvider[]
+
+This function should read process.env[config.groqApiKeyEnvVar] for the 
+Groq key and instantiate GroqProvider with that key + config.groqModel. 
+Same pattern for Gemini (fallback). Filter out any provider whose 
+required env var is missing (log a warning, don't throw), exactly as the 
+existing logic already does.
+
+Do NOT break the existing summarization and synthesis provider chain 
+creation calls elsewhere in the codebase — update THEIR call sites too, 
+passing groqApiKeyEnvVar: 'GROQ_API_KEY_SUMMARIZATION' with the existing 
+8B model, and groqApiKeyEnvVar: 'GROQ_API_KEY_SYNTHESIS' with the 
+existing 70B model, respectively, so their current behavior is fully 
+preserved.
+
+---
+
+3. UPDATE packages/core/src/agent/investigator.ts:
+
+The agent needs access to TWO separate provider chains now, both using 
+GROQ_API_KEY_AGENT but with different models:
+
+  const reasoningProviders = createProviderChain({
+    groqApiKeyEnvVar: 'GROQ_API_KEY_AGENT',
+    groqModel: 'llama-3.1-8b-instant',
+  });
+
+  const synthesisProviders = createProviderChain({
+    groqApiKeyEnvVar: 'GROQ_API_KEY_AGENT',
+    groqModel: 'llama-3.3-70b-versatile',
+  });
+
+Update the investigate() function's signature/internals so that:
+  - The PLANNING call (generatePlan / buildPlanPrompt) uses 
+    reasoningProviders with maxTokens reduced to 250 (down from whatever 
+    it currently is) — this call only needs to produce a short 3-5 step 
+    plan, not a long document.
+  - EVERY iteration's REASONING call (buildReasonPrompt / the ReAct 
+    decision step) uses reasoningProviders with maxTokens reduced to 250. 
+    This call only ever needs to return a small JSON object 
+    ({thought, action, toolName, toolArgs}) — it should never need more 
+    than ~250 tokens.
+  - The FINAL SYNTHESIS call (buildSynthesisPrompt / the answer-generation 
+    step) uses synthesisProviders (the 70B model) with maxTokens left at 
+    its current, larger value (this is the only call where output quality 
+    and length genuinely matter, since it produces the user-facing answer).
+
+Update the MAX_ITERATIONS constant from 10 to 6.
+
+If investigate()'s function signature currently accepts a single 
+`providers: LLMProvider[]` parameter from its caller, refactor it to 
+either (a) build both provider chains internally at the top of the 
+function using the config above, or (b) accept an object like 
+{ reasoningProviders: LLMProvider[], synthesisProviders: LLMProvider[] } 
+from the caller — pick whichever approach requires touching fewer other 
+files, and update the caller (wherever investigate() is invoked — CLI's 
+ask.ts if it exists yet, or the manual test scripts) accordingly to match 
+the new signature.
+---
+
+3.5. REDUCE TOTAL LLM CALL COUNT (Quota Conservation):
+
+Since this agent now uses its own dedicated but still rate-limited Groq 
+key, minimize the total number of LLM calls per question wherever 
+possible without breaking correctness:
+
+  - Merge the PLANNING call and the FIRST REASONING call into a single 
+    LLM call. Instead of calling generatePlan() and then separately 
+    calling the reasoning step for iteration 1, build one combined prompt 
+    that asks the model to return BOTH a short plan AND its first tool 
+    decision in one JSON response (e.g. { "plan": "...", "thought": "...", 
+    "action": "tool_call", "toolName": "...", "toolArgs": {...} }). Use 
+    this combined result to populate state.plan AND execute iteration 1's 
+    tool call, saving one full LLM round-trip per question.
+  - Add an early-exit check before each reasoning call: if the model's 
+    LAST response already had action === 'finish', do not make any 
+    further reasoning calls — proceed straight to synthesis.
+  - Do not make a reasoning call at all if MAX_ITERATIONS is already 
+    reached — go straight to the synthesis fallback using whatever 
+    scratchpad exists so far, exactly as the existing bounded-loop logic 
+    already does, but confirm this path costs exactly one synthesis call 
+    and zero extra reasoning calls.
+  - Confirm the total worst-case LLM call count per question is now: 
+    1 combined plan+first-decision call + up to 5 additional reasoning 
+    calls (iterations 2-6, since iteration 1 is now folded into the 
+    combined call) + 1 final synthesis call = 7 calls max per question 
+    (down from up to 8 under the previous 6-iteration design). Print/log 
+    this new worst-case number in a code comment above MAX_ITERATIONS 
+    for future reference.
+---
+
+4. UPDATE packages/core/src/agent/prompts.ts (if reasoning prompt text 
+needs adjustment for the smaller token budget):
+
+Review buildReasonPrompt() and confirm its instructions still clearly 
+tell the model to respond with ONLY the compact JSON object and nothing 
+else — no preamble, no explanation outside the JSON — since we now have 
+less token budget to work with and any wasted tokens on chatty preamble 
+increases the risk of truncation before the JSON is complete. Tighten the 
+prompt wording if needed to reinforce "respond with ONLY valid JSON, no 
+other text" more strongly.
+
+---
+
+4.5. MAXIMIZE PROMPT CLARITY IN prompts.ts (Instruction Optimization):
+
+Rewrite every prompt template in packages/core/src/agent/prompts.ts 
+(buildPlanPrompt or its merged replacement, buildReasonPrompt, 
+buildSynthesisPrompt) to be as close to 100% unambiguous as possible for 
+the 8B model specifically, since smaller models are more sensitive to 
+vague instructions than 70B. Apply these concrete improvements to every 
+prompt:
+
+  - State the EXACT expected output format at both the START and the END 
+    of the prompt (models pay more attention to the first and last lines) 
+    — e.g. begin with "You must respond with ONLY a JSON object matching 
+    this exact shape: {...}" and end with a repeated reminder: "Respond 
+    now with ONLY the JSON object. No explanation, no markdown fences, no 
+    text before or after it."
+  - Replace any open-ended phrasing (e.g. "decide what to do next") with 
+    an explicit numbered decision procedure (e.g. "1. Check if 
+    get_file_summary already answers this. 2. If not, choose exactly one 
+    tool from this list: [...]. 3. If you have enough information across 
+    all previous steps, set action to 'finish'.").
+  - Explicitly enumerate all 5 valid tool names and their exact parameter 
+    shapes directly in the reasoning prompt every single time (do not 
+    assume the model remembers them from earlier in the conversation) — 
+    list each as "toolName: <name> | required args: {shape}".
+  - Add one short positive example and one short negative example of a 
+    valid JSON response directly in the prompt template (few-shot 
+    guidance), clearly labeled "CORRECT EXAMPLE:" and "INCORRECT EXAMPLE 
+    (do not do this):".
+  - In buildSynthesisPrompt, explicitly instruct: "Every factual claim 
+    about the code must reference the specific file path it came from. 
+    If you are not certain about something, say so rather than guessing."
+  - Keep every instruction as short, direct, imperative sentences — 
+    remove any hedging or filler language from the existing prompt text.
+
+After rewriting, add a comment above each prompt-building function 
+briefly noting it was optimized for 8B-model reliability and reduced 
+call count.
+
+---
+
+5. UPDATE any existing tests that reference the old single-provider-chain 
+investigate() signature or the old MAX_ITERATIONS value of 10 
+(packages/core/src/__tests__/investigator.test.ts and any other affected 
+test files) so they pass with the new dual-chain signature and the new 
+cap of 6. Specifically update the "max iteration cap" test to assert it 
+stops at 6, not 10.
+
+---
+
+6. Manually verify: run a live test (using the existing 
+manual-test-agent.ts diagnostic script if it still exists, or a quick 
+ad-hoc check) asking one real question, and confirm via console logging 
+or timing that:
+   - Reasoning/planning calls are hitting the 8B model (check the model 
+     name in the request or add a temporary log if not already visible)
+   - The final answer call is hitting the 70B model
+   - Total iterations used stays at or below 6
+   - Overall question-answering time is noticeably faster than before
+Report these confirmations back to me, then remove any temporary debug 
+logging added just for this check.
+
+Run lint --fix. Run the full test suite (npm run test --workspaces) and 
+confirm no regressions. Append an entry to prompts.md documenting this 
+change per the CLAUDE.md format.
+
+---
+
+## Fix Deep Dive agent hallucinating file paths instead of using real ones
+
+### Goal
+A live manual-test-agent.ts run (against a real GitHub repo) surfaced a
+correctness bug: the agent's reasoning/planning prompts never listed any
+real file paths, only a count of summarized files — so the 8B model either
+copied the prompt's own hardcoded example path verbatim or invented
+descriptive phrases like "the entry point file" or "root" as literal tool
+arguments, causing every tool call to fail and the investigation to finish
+with no files examined. Fix by grounding both buildCombinedPlanAndDecisionPrompt
+and buildReasonPrompt in the session's actual summarized file paths and
+repoMeta's detected entry points, add a regression test, and re-verify no
+existing tests regress.
+
+### User Prompt
+Want me to fix the prompt-grounding bug now (agent never sees real file paths, so it hallucinates fake ones)?
+
+---
