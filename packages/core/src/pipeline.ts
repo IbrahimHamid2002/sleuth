@@ -38,8 +38,10 @@ const PIPELINE_TIMEOUT_MS = 5 * 60 * 1000;
 
 // Conservative free-tier RPM ceilings — under-provisioning just slows the run,
 // while guessing too high risks 429s the retry budget in provider.ts can't absorb.
-const GROQ_FREE_TIER_RPM = 30;
-const GEMINI_FREE_TIER_RPM = 15;
+// Kept a couple RPM below the actual free-tier ceiling as a safety buffer so we
+// never pace requests right up against the real limit.
+const GROQ_FREE_TIER_RPM = 28;
+const GEMINI_FREE_TIER_RPM = 13;
 
 const GITHUB_URL_WITH_CAPTURES = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?$/;
 
@@ -165,7 +167,10 @@ async function executePipeline(
 
   cache.initialize();
 
-  const summarizerProviders = createProviderChain('summarizer');
+  const summarizerProviders = createProviderChain({
+    groqApiKeyEnvVar: 'GROQ_SUMMARIZER_API_KEY',
+    groqModel: 'llama-3.1-8b-instant',
+  });
   const summarizerRateLimiters = buildRateLimiters(summarizerProviders);
 
   let summaries: FileSummary[];
@@ -186,7 +191,10 @@ async function executePipeline(
   }
 
   options.onProgress?.('synthesis', 'Synthesizing README/ARCHITECTURE/ONBOARDING');
-  const synthesizerProviders = createProviderChain('synthesizer');
+  const synthesizerProviders = createProviderChain({
+    groqApiKeyEnvVar: 'GROQ_SYNTHESIZER_API_KEY',
+    groqModel: 'llama-3.3-70b-versatile',
+  });
   const synthesizerRateLimiters = buildRateLimiters(synthesizerProviders);
   const synthesis = await synthesize(summaries, repoMeta, symbolIndex, synthesizerProviders, synthesizerRateLimiters, auditLog);
 
