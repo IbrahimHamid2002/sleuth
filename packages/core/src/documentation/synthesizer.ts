@@ -262,7 +262,9 @@ export async function synthesize(
   const results: Record<DocType, string> = { readme: '', architecture: '', onboarding: '' };
 
   settled.forEach((outcome, index) => {
-    const docType = docs[index].type;
+    // `settled` is produced by `Promise.allSettled(docs.map(...))`, so `index`
+    // is always in bounds for `docs` — noUncheckedIndexedAccess just can't see that.
+    const docType = docs[index]!.type;
 
     if (outcome.status === 'fulfilled') {
       results[docType] = mapCitations(outcome.value, symbolIndex);
