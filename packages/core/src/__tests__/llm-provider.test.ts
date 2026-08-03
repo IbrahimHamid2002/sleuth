@@ -5,16 +5,9 @@ import { callWithFallback, createProviderChain, GroqProvider } from '../llm/prov
 import { TokenBucketRateLimiter } from '../llm/rate-limiter';
 
 describe('GroqProvider', () => {
-  const originalApiKey = process.env.GROQ_SUMMARIZER_API_KEY;
-
-  beforeEach(() => {
-    process.env.GROQ_SUMMARIZER_API_KEY = 'test-groq-key';
-  });
-
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    process.env.GROQ_SUMMARIZER_API_KEY = originalApiKey;
   });
 
   it('retries once on a mocked 429 response, honoring retry-after', async () => {
@@ -36,7 +29,7 @@ describe('GroqProvider', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const provider = new GroqProvider('llama-3.1-8b-instant');
+    const provider = new GroqProvider('test-groq-key', 'llama-3.1-8b-instant');
     const resultPromise = provider.complete('prompt', { maxTokens: 100, temperature: 0.5 });
 
     await vi.advanceTimersByTimeAsync(1000);
@@ -45,10 +38,8 @@ describe('GroqProvider', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
-  it('throws GROQ_SUMMARIZER_API_KEY error when the key is missing at construction', () => {
-    delete process.env.GROQ_SUMMARIZER_API_KEY;
-
-    expect(() => new GroqProvider('llama-3.1-8b-instant')).toThrow('GROQ_SUMMARIZER_API_KEY is not set');
+  it('throws when constructed with an empty API key', () => {
+    expect(() => new GroqProvider('', 'llama-3.1-8b-instant')).toThrow(/non-empty API key/);
   });
 
   it('retries up to 3 times on repeated 429 responses before succeeding, not just once', async () => {
@@ -65,7 +56,7 @@ describe('GroqProvider', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const provider = new GroqProvider('llama-3.1-8b-instant');
+    const provider = new GroqProvider('test-groq-key', 'llama-3.1-8b-instant');
     const resultPromise = provider.complete('prompt', { maxTokens: 100, temperature: 0.5 });
 
     await vi.advanceTimersByTimeAsync(2000);
@@ -83,7 +74,7 @@ describe('GroqProvider', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const provider = new GroqProvider('llama-3.1-8b-instant');
+    const provider = new GroqProvider('test-groq-key', 'llama-3.1-8b-instant');
     const resultPromise = provider.complete('prompt', { maxTokens: 100, temperature: 0.5 });
     const assertion = expect(resultPromise).rejects.toThrow(/HTTP 429/);
 
@@ -93,6 +84,52 @@ describe('GroqProvider', () => {
 
     await assertion;
     expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects immediately without calling fetch when the signal is already aborted', async () => {
+    const fetchMock = vi.fn();
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new GroqProvider('test-groq-key', 'llama-3.1-8b-instant');
+    const controller = new AbortController();
+
+    controller.abort();
+
+    await expect(
+      provider.complete('prompt', { maxTokens: 100, temperature: 0.5 }, controller.signal),
+    ).rejects.toThrow(/aborted/i);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('interrupts a retry-after wait when the signal aborts mid-wait, without a second fetch attempt', async () => {
+    vi.useFakeTimers();
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'rate limited' }), {
+          status: 429,
+          headers: { 'retry-after': '30' },
+        }),
+      );
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new GroqProvider('test-groq-key', 'llama-3.1-8b-instant');
+    const controller = new AbortController();
+    const resultPromise = provider.complete('prompt', { maxTokens: 100, temperature: 0.5 }, controller.signal);
+    const assertion = expect(resultPromise).rejects.toThrow(/aborted/i);
+
+    await vi.advanceTimersByTimeAsync(2000);
+    controller.abort();
+    await vi.advanceTimersByTimeAsync(0);
+
+    await assertion;
+    // Only the first attempt happened — the 30s retry-after wait never ran to
+    // completion, proving the deadline actually interrupted it instead of the
+    // request continuing to consume free-tier quota in the background.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -141,8 +178,6 @@ describe('callWithFallback', () => {
   it('never calls Gemini when Groq succeeds on the first attempt', async () => {
     vi.useFakeTimers();
 
-    process.env.GROQ_SUMMARIZER_API_KEY = 'test-groq-key';
-
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(
@@ -151,7 +186,7 @@ describe('callWithFallback', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const groq = new GroqProvider('llama-3.1-8b-instant');
+    const groq = new GroqProvider('test-groq-key', 'llama-3.1-8b-instant');
     const geminiComplete = vi.fn().mockResolvedValue('gemini answer');
     const gemini: LLMProvider = { name: 'gemini', complete: geminiComplete };
 
@@ -163,13 +198,10 @@ describe('callWithFallback', () => {
 
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    delete process.env.GROQ_SUMMARIZER_API_KEY;
   });
 
   it('never calls Gemini when Groq succeeds only after its own internal 429 retry', async () => {
     vi.useFakeTimers();
-
-    process.env.GROQ_SUMMARIZER_API_KEY = 'test-groq-key';
 
     const fetchMock = vi
       .fn()
@@ -182,7 +214,7 @@ describe('callWithFallback', () => {
 
     vi.stubGlobal('fetch', fetchMock);
 
-    const groq = new GroqProvider('llama-3.1-8b-instant');
+    const groq = new GroqProvider('test-groq-key', 'llama-3.1-8b-instant');
     const geminiComplete = vi.fn().mockResolvedValue('gemini answer');
     const gemini: LLMProvider = { name: 'gemini', complete: geminiComplete };
 
@@ -199,7 +231,6 @@ describe('callWithFallback', () => {
 
     vi.useRealTimers();
     vi.unstubAllGlobals();
-    delete process.env.GROQ_SUMMARIZER_API_KEY;
   });
 
   it('calls Gemini exactly once, and returns its result, when Groq throws after exhausting its own retries', async () => {
@@ -224,6 +255,31 @@ describe('callWithFallback', () => {
     await expect(
       callWithFallback([groq, gemini], 'prompt', { maxTokens: 100, temperature: 0.5 }, new Map()),
     ).rejects.toThrow(/groq.*groq down.*gemini.*gemini down/s);
+  });
+
+  it('skips every provider and calls none of them once the signal is already aborted', async () => {
+    const controller = new AbortController();
+
+    controller.abort();
+
+    const p1: LLMProvider = { name: 'p1', complete: vi.fn().mockResolvedValue('p1 answer') };
+    const p2: LLMProvider = { name: 'p2', complete: vi.fn().mockResolvedValue('p2 answer') };
+
+    await expect(
+      callWithFallback([p1, p2], 'prompt', { maxTokens: 100, temperature: 0.5 }, new Map(), controller.signal),
+    ).rejects.toThrow(/deadline already exceeded/i);
+    expect(p1.complete).not.toHaveBeenCalled();
+    expect(p2.complete).not.toHaveBeenCalled();
+  });
+
+  it('forwards the signal through to provider.complete', async () => {
+    const controller = new AbortController();
+    const completeMock = vi.fn().mockResolvedValue('answer');
+    const provider: LLMProvider = { name: 'p1', complete: completeMock };
+
+    await callWithFallback([provider], 'prompt', { maxTokens: 100, temperature: 0.5 }, new Map(), controller.signal);
+
+    expect(completeMock).toHaveBeenCalledWith('prompt', { maxTokens: 100, temperature: 0.5 }, controller.signal);
   });
 });
 
@@ -254,38 +310,68 @@ describe('TokenBucketRateLimiter', () => {
 });
 
 describe('createProviderChain', () => {
-  const originalSummarizerKey = process.env.GROQ_SUMMARIZER_API_KEY;
-  const originalSynthesizerKey = process.env.GROQ_SYNTHESIZER_API_KEY;
+  const originalAgentKey = process.env.GROQ_DEEP_DIVE_AGENT_API_KEY;
   const originalGeminiKey = process.env.GEMINI_API_KEY;
 
   afterEach(() => {
-    process.env.GROQ_SUMMARIZER_API_KEY = originalSummarizerKey;
-    process.env.GROQ_SYNTHESIZER_API_KEY = originalSynthesizerKey;
+    process.env.GROQ_DEEP_DIVE_AGENT_API_KEY = originalAgentKey;
     process.env.GEMINI_API_KEY = originalGeminiKey;
   });
 
-  it('defaults to the summarizer-flavored Groq provider when no role is given', () => {
-    process.env.GROQ_SUMMARIZER_API_KEY = 'summarizer-key';
-    delete process.env.GROQ_SYNTHESIZER_API_KEY;
+  it('builds a Groq provider using the given env var and model', () => {
+    process.env.GROQ_DEEP_DIVE_AGENT_API_KEY = 'agent-key';
     delete process.env.GEMINI_API_KEY;
 
-    expect(createProviderChain()).toHaveLength(1);
+    const providers = createProviderChain({
+      groqApiKeyEnvVar: 'GROQ_DEEP_DIVE_AGENT_API_KEY',
+      groqModel: 'llama-3.1-8b-instant',
+    });
+
+    expect(providers).toHaveLength(1);
+    expect(providers[0]?.name).toBe('groq');
   });
 
-  it('builds a Groq provider from GROQ_SYNTHESIZER_API_KEY for the synthesizer role, independent of the summarizer key', () => {
-    delete process.env.GROQ_SUMMARIZER_API_KEY;
-    process.env.GROQ_SYNTHESIZER_API_KEY = 'synthesizer-key';
+  it('skips Groq (warns, does not throw) when the configured env var is missing', () => {
+    delete process.env.GROQ_DEEP_DIVE_AGENT_API_KEY;
     delete process.env.GEMINI_API_KEY;
 
-    expect(createProviderChain('synthesizer')).toHaveLength(1);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const providers = createProviderChain({
+      groqApiKeyEnvVar: 'GROQ_DEEP_DIVE_AGENT_API_KEY',
+      groqModel: 'llama-3.1-8b-instant',
+    });
+
+    expect(providers).toHaveLength(0);
+    expect(warnSpy).toHaveBeenCalledWith('GROQ_DEEP_DIVE_AGENT_API_KEY is not set — skipping Groq provider');
+
+    warnSpy.mockRestore();
   });
 
-  it('skips Groq for a role whose key is missing, even when the other role key is set', () => {
-    process.env.GROQ_SUMMARIZER_API_KEY = 'summarizer-key';
-    delete process.env.GROQ_SYNTHESIZER_API_KEY;
+  it('includes Gemini via the default GEMINI_API_KEY env var when geminiApiKeyEnvVar is not given', () => {
+    delete process.env.GROQ_DEEP_DIVE_AGENT_API_KEY;
+    process.env.GEMINI_API_KEY = 'gemini-key';
+
+    const providers = createProviderChain({
+      groqApiKeyEnvVar: 'GROQ_DEEP_DIVE_AGENT_API_KEY',
+      groqModel: 'llama-3.1-8b-instant',
+    });
+
+    expect(providers).toHaveLength(1);
+    expect(providers[0]?.name).toBe('gemini');
+  });
+
+  it('two configs reading the same Groq env var with different models both build independently', () => {
+    process.env.GROQ_DEEP_DIVE_AGENT_API_KEY = 'agent-key';
     delete process.env.GEMINI_API_KEY;
 
-    expect(createProviderChain('synthesizer')).toHaveLength(0);
-    expect(createProviderChain('summarizer')).toHaveLength(1);
+    const reasoning = createProviderChain({ groqApiKeyEnvVar: 'GROQ_DEEP_DIVE_AGENT_API_KEY', groqModel: 'llama-3.1-8b-instant' });
+    const synthesis = createProviderChain({
+      groqApiKeyEnvVar: 'GROQ_DEEP_DIVE_AGENT_API_KEY',
+      groqModel: 'llama-3.3-70b-versatile',
+    });
+
+    expect(reasoning).toHaveLength(1);
+    expect(synthesis).toHaveLength(1);
   });
 });
