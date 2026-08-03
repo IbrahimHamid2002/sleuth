@@ -15,6 +15,13 @@ export const AgentDecisionSchema = z.object({
   toolArgs: z.record(z.unknown()).optional(),
 });
 
+// The Deep Dive agent's first iteration merges planning and its first
+// tool-call decision into one LLM call (quota conservation) — this is that
+// combined response shape, an AgentDecision plus a "plan" field.
+export const CombinedPlanAndDecisionSchema = AgentDecisionSchema.extend({
+  plan: z.string(),
+});
+
 export const ToolArgsSchemas = {
   read_file: z.object({ path: z.string() }),
   search_code: z.object({ query: z.string(), maxResults: z.number().default(20) }),
