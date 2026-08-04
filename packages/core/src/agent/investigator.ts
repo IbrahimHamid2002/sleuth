@@ -127,6 +127,11 @@ async function runInvestigation(
 
   if (fastPathAnswer !== undefined) {
     emit(onEvent, 'fast_path_hit', { message: 'Answered from the pre-generated documents — no source investigation needed.' });
+    // Callers streaming events (e.g. the API's SSE endpoint) close on the
+    // first 'answer' event — without this, a fast-path hit would never emit
+    // one and every consumer would have to wait out its own safety timeout
+    // instead of closing the instant the (already-available) answer is ready.
+    emit(onEvent, 'answer', { answer: fastPathAnswer });
     touchSession(session);
 
     return {
