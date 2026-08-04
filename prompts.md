@@ -1908,3 +1908,84 @@ Even simple questions currently hit the agent's 60s timeout, because the agent g
 4. Rough note on any new infra requirements introduced (e.g. job queue, checkpoint storage) and their cost/ops implications.
 
 ---
+
+## Implement @sleuth/api Analyze & Deep Dive Routes
+
+### Goal
+Build out the previously-scaffolded `@sleuth/api` package into a working Express API (analyze pipeline endpoints + Deep Dive session/SSE endpoints + idle-session reaper) that calls the exact same `@sleuth/core` functions as the CLI, per ARCHITECTURE.md's dependency rule.
+
+### User Prompt
+Read SESSION_SUMMARY.md file first.
+Then,
+Read PRD.md Sections 4.9 and 5, ARCHITECTURE.md's dependency rule
+(@sleuth/api depends on @sleuth/core only).
+
+Add dependencies to packages/api: express, cors, archiver, uuid.
+Add packages/api dependency on the local @sleuth/core package.
+
+Implement packages/api/src/routes/analyze.ts as an Express Router:
+- POST /analyze — body: { url?, localPath?, pat? }. Validate exactly one
+  of url/localPath is present. Enforce max 2 concurrent runs via an
+  in-memory counter — respond 429 "Server busy, try again shortly" if
+  exceeded. Generate a runId (uuid), store an initial RunState in an
+  in-memory Map<string, RunState>, kick off runPipeline ASYNCHRONOUSLY
+  (do not await in the handler) updating the stored RunState via the
+  onProgress callback, wrapped so completion/errors update state.status
+  to 'complete'/'error'. Respond immediately { runId }. NEVER log the
+  pat value — use redactSecrets on any request logging middleware.
+- GET /runs/:runId/status — returns { status, progress, error? } from
+  the in-memory Map, 404 if runId unknown.
+- GET /runs/:runId/results — 400 if status isn't 'complete'; otherwise
+  returns { meta, synthesis, summaries: top 50 by score, auditLog,
+  durationMs }.
+- GET /runs/:runId/download — uses archiver to zip the 3 markdown docs
+  in-memory and stream as application/zip with Content-Disposition.
+Cap stored runs at 50 — evict oldest on insert when exceeded (also call
+cleanupSandbox for evicted entries if their sandbox wasn't already
+cleaned).
+
+Implement packages/api/src/routes/sessions.ts as an Express Router:
+- POST /sessions/start — body: { runId }. Looks up the completed run's
+  sandboxPath/repoMeta/summaries, calls createSession, stores in an
+  in-memory Map<string, DeepDiveSession>. Returns { sessionId }.
+- POST /sessions/:sessionId/ask — body: { question }. Generates an
+  investigationId, stores a pending investigation record, kicks off
+  investigate() asynchronously passing an onEvent callback that appends
+  events to an in-memory array keyed by investigationId (for the SSE
+  endpoint to read from), calls touchSession. Returns { investigationId }
+  immediately.
+- GET /sessions/:sessionId/investigations/:id/stream — Server-Sent
+  Events endpoint. Set headers: Content-Type: text/event-stream,
+  Cache-Control: no-cache, Connection: keep-alive. Poll the in-memory
+  event array for this investigationId every 200ms and write any new
+  events as `event: {type}\ndata: {JSON}\n\n`, closing the stream once
+  an 'answer' event has been sent or after a 65s safety timeout.
+- POST /sessions/:sessionId/end — calls terminateSession, removes from
+  the Map, returns { success: true }.
+
+Implement packages/api/src/session-reaper.ts:
+- export function startSessionReaper(sessions: Map<string,
+  DeepDiveSession>): NodeJS.Timeout
+  setInterval every 5 minutes: for each session where (Date.now() -
+  lastActivityAt) > 30 minutes, call terminateSession and delete from
+  the map, console.log a reap notice.
+
+Implement packages/api/src/index.ts:
+Express app, cors middleware restricted to [process.env.WEB_ORIGIN,
+'http://localhost:5173'], express.json(), mount both routers under /api,
+a global error-handling middleware that redacts secrets before logging
+and returns { error: message }, start the session reaper, listen on
+process.env.PORT.
+
+Write packages/api/src/__tests__/api.test.ts using supertest, mocking
+runPipeline and investigate:
+- Full flow: POST /analyze → poll /status until complete → GET /results
+  → POST /sessions/start → POST /ask → GET SSE stream receives an
+  'answer' event → POST /end → verify session removed from map
+- POST /analyze with both url and localPath returns 400
+- Exceeding 2 concurrent runs returns 429
+
+make these apis super-fast & production grade because the LLM calls takes ttime to execute so if apis are fast then it will compensate a lot more time for the application.
+Run auto-lint skill. Append entry to prompts.md
+
+---
