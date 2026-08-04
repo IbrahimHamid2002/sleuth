@@ -1,9 +1,14 @@
 import { randomUUID } from 'node:crypto';
 
 import { cleanupSandbox } from '../ingestion/sandbox-manager';
-import type { DeepDiveSession, FileSummary, RepoMeta } from '../types';
+import type { DeepDiveSession, FileSummary, RepoMeta, SynthesisResult } from '../types';
 
-export function createSession(repoMeta: RepoMeta, sandboxPath: string, summaries: FileSummary[]): DeepDiveSession {
+export function createSession(
+  repoMeta: RepoMeta,
+  sandboxPath: string,
+  summaries: FileSummary[],
+  generatedDocs?: SynthesisResult,
+): DeepDiveSession {
   const summariesMap = new Map<string, FileSummary>(summaries.map((summary) => [summary.path, summary]));
   const now = Date.now();
 
@@ -15,6 +20,7 @@ export function createSession(repoMeta: RepoMeta, sandboxPath: string, summaries
     visitedFiles: new Map<string, string>(),
     createdAt: now,
     lastActivityAt: now,
+    generatedDocs,
   };
 }
 
