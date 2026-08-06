@@ -1,42 +1,13 @@
 import type { SummaryCache } from '../cache/sqlite-cache';
-import type { LLMProvider } from '../llm/provider';
+import { SUMMARIZER_MAX_BATCH_CHARS, SUMMARIZER_MAX_BATCH_FILES, SUMMARIZER_MAX_CONCURRENT_BATCHES, SUMMARIZER_MAX_TOKENS, SUMMARIZER_PROMPT_VERSION, SUMMARIZER_TEMPERATURE } from '../constants';
 import { callWithFallback } from '../llm/provider';
 import type { TokenBucketRateLimiter } from '../llm/rate-limiter';
 import { FileSummarySchema } from '../schemas';
 import { sanitizeForLLM } from '../security/sanitize';
-import type { AuditEntry, FileNode, FileSummary, RepoMeta } from '../types';
+import type { AuditEntry, FileNode, FileSummary, LLMProvider, PendingFile, RepoMeta, SummarizeFilesResult } from '../types';
 import { extractJSON } from '../utils/json-repair';
 
-const PROMPT_VERSION = 'v1';
-const MAX_BATCH_FILES = 5;
-const MAX_BATCH_CHARS = 6000;
-const SUMMARIZER_MAX_TOKENS = 2000;
-const SUMMARIZER_TEMPERATURE = 0.2;
-// Concurrent in-flight batches. The shared TokenBucketRateLimiter (per
-// provider) still paces actual request starts to the real RPM ceiling — this
-// just lets that many requests be queued/in-flight at once instead of
-// forcing one full round-trip to finish before the next begins, which is the
-// single biggest lever for cutting wall-clock time on large repos.
-// Lowered from 6 to 3 (immediate stopgap): a fresh free-tier Groq account's
-// real tokens-per-minute ceiling (confirmed live: 6000 TPM for
-// llama-3.1-8b-instant) is easily blown through by 6 concurrent batches each
-// carrying up to MAX_BATCH_CHARS of source plus SUMMARIZER_MAX_TOKENS of
-// output — the rate limiter at the time had no TPM awareness at all to catch
-// this before firing. See llm/rate-limiter.ts's PROVIDER_RATE_LIMITS for the
-// real fix (TPM-aware gating); this halving is a cheap, independent
-// mitigation kept as its own commit so it can be reverted on its own.
-const MAX_CONCURRENT_BATCHES = 3;
-
-export interface SummarizeFilesResult {
-  summaries: FileSummary[];
-  failedFiles: string[];
-}
-
-interface PendingFile {
-  file: FileNode;
-  cacheKey: string;
-  contentHash: string;
-}
+export type { SummarizeFilesResult } from '../types';
 
 function fallbackSummary(path: string): FileSummary {
   return {
@@ -55,8 +26,8 @@ function buildBatches(files: FileNode[], contentCache: Map<string, string>): Fil
 
   for (const file of files) {
     const contentLength = sanitizeForLLM(contentCache.get(file.path) ?? '').length;
-    const exceedsFileCount = currentBatch.length >= MAX_BATCH_FILES;
-    const exceedsCharLimit = currentBatch.length > 0 && currentChars + contentLength > MAX_BATCH_CHARS;
+    const exceedsFileCount = currentBatch.length >= SUMMARIZER_MAX_BATCH_FILES;
+    const exceedsCharLimit = currentBatch.length > 0 && currentChars + contentLength > SUMMARIZER_MAX_BATCH_CHARS;
 
     if (exceedsFileCount || exceedsCharLimit) {
       batches.push(currentBatch);
@@ -94,8 +65,8 @@ Return a JSON array of these objects, one per file, in the same order as the fil
 }
 
 // Runs `fn` over `items` with at most `limit` concurrently in flight. Not a
-// dependency (e.g. p-limit) per CLAUDE.md §4 rule 7 — a bounded worker pool
-// over a shared cursor is ~15 lines and this is the only caller.
+// dependency (e.g. p-limit) per CLAUDE.md's no-heavyweight-deps rule — a
+// bounded worker pool over a shared cursor is ~15 lines and this is the only caller.
 async function mapWithConcurrency<T>(items: T[], limit: number, fn: (item: T, index: number) => Promise<void>): Promise<void> {
   let nextIndex = 0;
 
@@ -137,7 +108,7 @@ export async function summarizeFiles(
 
   for (const file of files) {
     const contentHash = cache.hashContent(contentCache.get(file.path) ?? '');
-    const cacheKey = cache.buildKey(repoMeta.identifier, repoMeta.commitHash, file.path, contentHash, PROMPT_VERSION);
+    const cacheKey = cache.buildKey(repoMeta.identifier, repoMeta.commitHash, file.path, contentHash, SUMMARIZER_PROMPT_VERSION);
     const cached = cache.get(cacheKey);
 
     if (cached !== null) {
@@ -159,13 +130,12 @@ export async function summarizeFiles(
 
   // Runs one batch to completion, updating shared state (cache, results,
   // progress, audit log) as a side effect. Safe to call concurrently from
-  // multiple workers: JS has no real threads, so each mutation below runs to
+  // multiple workers: JS has no real threads, so each mutation runs to
   // completion between `await` points with no interleaving risk.
   async function processBatch(batch: FileNode[]): Promise<void> {
     if (signal?.aborted === true) {
       // A cancelled run should still leave a coherent partial result (every
       // already-cached file keeps its real summary) rather than throwing —
-      // per the "duration/cancellation is not the same as failure" principle,
       // the caller decides what a cancellation means, not this function.
       batch.forEach((file) => resultsByPath.set(file.path, fallbackSummary(file.path)));
       failedFiles.push(...batch.map((file) => file.path));
@@ -244,7 +214,7 @@ export async function summarizeFiles(
     onProgress?.(completed, total);
   }
 
-  await mapWithConcurrency(batches, MAX_CONCURRENT_BATCHES, processBatch);
+  await mapWithConcurrency(batches, SUMMARIZER_MAX_CONCURRENT_BATCHES, processBatch);
 
   const hitRatePercent = total > 0 ? (cacheHitCount / total) * 100 : 0;
 
