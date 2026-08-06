@@ -188,6 +188,10 @@ async function executePipeline(
   const summarizerProviders = createProviderChain({
     groqApiKeyEnvVar: 'GROQ_SUMMARIZER_API_KEY',
     groqModel: 'llama-3.1-8b-instant',
+    // High-volume, simple structured-JSON extraction per file/batch — the
+    // smallest/fastest free model in the shortlist keeps pace with the
+    // per-file loop without needing deep reasoning.
+    openrouterModel: 'google/gemma-4-26b-a4b-it:free',
   });
   const summarizerRateLimiters = buildRateLimiters(summarizerProviders);
 
@@ -233,6 +237,10 @@ async function executePipeline(
   const synthesizerProviders = createProviderChain({
     groqApiKeyEnvVar: 'GROQ_SYNTHESIZER_API_KEY',
     groqModel: 'llama-3.3-70b-versatile',
+    // Long-form structured document generation (README/ARCHITECTURE/
+    // ONBOARDING) needs solid instruction-following and coherence — a
+    // capable general-purpose model, not the smallest one in the shortlist.
+    openrouterModel: 'openai/gpt-oss-20b:free',
   });
   const synthesizerRateLimiters = buildRateLimiters(synthesizerProviders);
   const synthesis = await synthesize(
