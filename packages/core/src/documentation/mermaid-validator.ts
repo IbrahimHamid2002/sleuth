@@ -1,44 +1,7 @@
-export interface MermaidBlock {
-  raw: string;
-  code: string;
-  startIndex: number;
-  endIndex: number;
-}
+import { MERMAID_FENCE_PATTERN, MERMAID_UNQUOTED_LABEL_WITH_SPECIAL_CHARS_PATTERN, MERMAID_VALID_DIAGRAM_KEYWORDS } from '../constants';
+import type { MermaidBlock, MermaidValidationResult } from '../types';
 
-export interface MermaidValidationResult {
-  valid: boolean;
-  errors: string[];
-}
-
-// Every diagram type mermaid actually supports — a block whose first line
-// doesn't start with one of these is either garbage or a hallucinated
-// diagram type, and will fail to render regardless of anything else being
-// syntactically fine.
-const VALID_DIAGRAM_KEYWORDS = [
-  'flowchart',
-  'graph',
-  'sequenceDiagram',
-  'classDiagram',
-  'stateDiagram-v2',
-  'stateDiagram',
-  'erDiagram',
-  'journey',
-  'gantt',
-  'pie',
-  'gitGraph',
-  'mindmap',
-  'timeline',
-  'quadrantChart',
-];
-
-const MERMAID_FENCE_PATTERN = /```mermaid\n([\s\S]*?)```/g;
-
-// The single most common real-world breakage: an unquoted node label like
-// A[Label: text (detail)] — mermaid interprets ":", "(", ")", and "|" inside
-// an unquoted [ ] label as syntax, not literal text, which corrupts parsing
-// even though brackets/quotes still balance overall. Quoted labels
-// (containing a ") are exempt — the character class excludes ".
-const UNQUOTED_LABEL_WITH_SPECIAL_CHARS_PATTERN = /\[[^\]"]*[():|][^\]"]*\]/;
+export type { MermaidBlock, MermaidValidationResult } from '../types';
 
 export function extractMermaidBlocks(markdown: string): MermaidBlock[] {
   const blocks: MermaidBlock[] = [];
@@ -76,10 +39,9 @@ function hasBalancedPair(code: string, open: string, close: string): boolean {
 }
 
 // Deterministic, heuristic structural checks — not a real Mermaid parser (no
-// full grammar dependency per CLAUDE.md §4 rule 7's no-heavyweight-deps
-// constraint). Catches the failure modes actually observed breaking rendered
-// diagrams: wrong/missing diagram-type keyword and unbalanced
-// brackets/quotes from an unquoted label containing special characters.
+// full grammar dependency, per CLAUDE.md's no-heavyweight-deps rule). Catches
+// the failure modes actually observed: a wrong/missing diagram-type keyword
+// and unbalanced brackets/quotes from an unquoted label with special characters.
 export function validateMermaidSyntax(code: string): MermaidValidationResult {
   const errors: string[] = [];
   const trimmed = code.trim();
@@ -89,10 +51,10 @@ export function validateMermaidSyntax(code: string): MermaidValidationResult {
   }
 
   const firstLine = trimmed.split('\n')[0]?.trim() ?? '';
-  const hasKnownKeyword = VALID_DIAGRAM_KEYWORDS.some((keyword) => firstLine.startsWith(keyword));
+  const hasKnownKeyword = MERMAID_VALID_DIAGRAM_KEYWORDS.some((keyword) => firstLine.startsWith(keyword));
 
   if (!hasKnownKeyword) {
-    errors.push(`First line "${firstLine}" does not start with a recognized diagram type (expected one of: ${VALID_DIAGRAM_KEYWORDS.join(', ')})`);
+    errors.push(`First line "${firstLine}" does not start with a recognized diagram type (expected one of: ${MERMAID_VALID_DIAGRAM_KEYWORDS.join(', ')})`);
   }
 
   if (!hasBalancedPair(trimmed, '[', ']')) {
@@ -113,7 +75,7 @@ export function validateMermaidSyntax(code: string): MermaidValidationResult {
     errors.push('Unbalanced double quotes');
   }
 
-  if (UNQUOTED_LABEL_WITH_SPECIAL_CHARS_PATTERN.test(trimmed)) {
+  if (MERMAID_UNQUOTED_LABEL_WITH_SPECIAL_CHARS_PATTERN.test(trimmed)) {
     errors.push('An unquoted [ ] label contains ":", "(", ")", or "|" — wrap the label in quotes, e.g. A["Label: text"]');
   }
 

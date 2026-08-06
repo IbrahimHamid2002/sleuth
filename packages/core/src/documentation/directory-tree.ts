@@ -1,9 +1,5 @@
-interface TreeNode {
-  children: Map<string, TreeNode>;
-  isFile: boolean;
-}
-
-const MAX_TREE_LINES = 400;
+import { DIRECTORY_TREE_MAX_LINES } from '../constants';
+import type { TreeNode } from '../types';
 
 function createNode(): TreeNode {
   return { children: new Map(), isFile: false };
@@ -43,7 +39,7 @@ function renderNode(node: TreeNode, prefix: string, lines: string[]): void {
   const entries = sortedEntries(node);
 
   entries.forEach(([name, child], index) => {
-    if (lines.length >= MAX_TREE_LINES) {
+    if (lines.length >= DIRECTORY_TREE_MAX_LINES) {
       return;
     }
 
@@ -59,11 +55,8 @@ function renderNode(node: TreeNode, prefix: string, lines: string[]): void {
 }
 
 // Renders an exact, deterministic ASCII directory tree from real discovered
-// file paths — this is never handed to the LLM to reproduce from memory. An
-// LLM asked to "recall" a file tree from prose summaries reliably invents or
-// drops paths, the same failure class documented for agent/prompts.ts's
-// real-path-grounding fix; a tree is 100% derivable from data we already
-// have, so it should never be LLM-generated in the first place.
+// file paths — never handed to the LLM to reproduce from memory, since an LLM
+// asked to "recall" a tree from prose reliably invents or drops paths.
 export function buildDirectoryTree(paths: string[]): string {
   if (paths.length === 0) {
     return '(no files discovered)';
@@ -79,8 +72,8 @@ export function buildDirectoryTree(paths: string[]): string {
 
   renderNode(root, '', lines);
 
-  if (lines.length >= MAX_TREE_LINES) {
-    lines.push(`... (truncated — ${paths.length} total files, showing the first ${MAX_TREE_LINES} tree lines)`);
+  if (lines.length >= DIRECTORY_TREE_MAX_LINES) {
+    lines.push(`... (truncated — ${paths.length} total files, showing the first ${DIRECTORY_TREE_MAX_LINES} tree lines)`);
   }
 
   return lines.join('\n');
