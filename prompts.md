@@ -3,56 +3,61 @@
 ## npm workspaces monorepo scaffolding
 
 ### Goal
+
 Stand up the initial npm workspaces monorepo structure (core/cli/api/web) with shared strict TS config, lint/format tooling, and env templates, and verify the build succeeds — no business logic yet.
 
 ### User Prompt
+
 Read PRD.md and ARCHITECTURE.md Section 3 (Modular Directory Tree).
 
-  Create an npm workspaces monorepo in this current directory with exact structure:
-  packages/core, packages/cli, packages/api, packages/web — each with its own
-  package.json and tsconfig.json extending a root tsconfig.base.json (strict
-  mode, ES2022 target, ESM modules).
+Create an npm workspaces monorepo in this current directory with exact structure:
+packages/core, packages/cli, packages/api, packages/web — each with its own
+package.json and tsconfig.json extending a root tsconfig.base.json (strict
+mode, ES2022 target, ESM modules).
 
-  Root package.json: workspaces: ["packages/*"], add root-level scripts:
-  "build": "npm run build --workspaces", "test": "npm run test --workspaces --if-present",
-  "lint": "eslint . --ext .ts,.tsx".
+Root package.json: workspaces: ["packages/*"], add root-level scripts:
+"build": "npm run build --workspaces", "test": "npm run test --workspaces --if-present",
+"lint": "eslint . --ext .ts,.tsx".
 
-  Add ESLint + Prettier config at root (typescript-eslint recommended rules).
+Add ESLint + Prettier config at root (typescript-eslint recommended rules).
 
-  Create .env.example & .env with: GROQ_SUMMARIZER_API_KEY=, GROQ_SYNTHESIZER_API_KEY=, GEMINI_API_KEY=, WEB_ORIGIN=,
-  PORT=3001, SESSION_SECRET=.
+Create .env.example & .env with: GROQ_SUMMARIZER_API_KEY=, GROQ_SYNTHESIZER_API_KEY=, GEMINI_API_KEY=, WEB_ORIGIN=,
+PORT=3001, SESSION_SECRET=.
 
-  Do NOT write any business logic yet — this task is scaffolding only.
-  Create empty packages/core/src/index.ts, packages/cli/src/index.ts,
-  packages/api/src/index.ts as placeholders with a single console.log.
+Do NOT write any business logic yet — this task is scaffolding only.
+Create empty packages/core/src/index.ts, packages/cli/src/index.ts,
+packages/api/src/index.ts as placeholders with a single console.log.
 
-  After creating files, run `npm install` and verify `npm run build` succeeds
-  with no errors across all workspaces.
+After creating files, run `npm install` and verify `npm run build` succeeds
+with no errors across all workspaces.
 
-  Append an entry to prompts.md per the format in CLAUDE.md.
+Append an entry to prompts.md per the format in CLAUDE.md.
 
 ---
 
 ## Core shared types and Zod validation schemas
 
 ### Goal
+
 Implement the shared TypeScript interfaces and Zod schemas from ARCHITECTURE.md Section 6 in packages/core, with test coverage for the validation boundaries.
 
 ### User Prompt
+
 Read ARCHITECTURE.md Section 6 (Shared TypeScript Interfaces & Zod Schemas).
 
-Implement packages/core/src/types.ts with EXACTLY these interfaces, verbatim as specified in ARCHITECTURE.md: RepoInput, RepoMeta, FileNode, 
-Symbol, FileSummary, SynthesisResult, AuditEntry, AgentDecision, 
+Implement packages/core/src/types.ts with EXACTLY these interfaces, verbatim as specified in ARCHITECTURE.md: RepoInput, RepoMeta, FileNode,
+Symbol, FileSummary, SynthesisResult, AuditEntry, AgentDecision,
 DeepDiveSession, InvestigationResult. Every field must have an explicit type — no `any`.
 
-Implement packages/core/src/schemas.ts with Zod schemas: 
-FileSummarySchema, AgentDecisionSchema, ToolArgsSchemas (an object with 5 keys matching the 5 agent tools: read_file, search_code, 
-list_directory, get_file_summary, find_references), and RepoInputSchema with a .refine() ensuring path is required for 'local' type and url is 
+Implement packages/core/src/schemas.ts with Zod schemas:
+FileSummarySchema, AgentDecisionSchema, ToolArgsSchemas (an object with 5 keys matching the 5 agent tools: read_file, search_code,
+list_directory, get_file_summary, find_references), and RepoInputSchema with a .refine() ensuring path is required for 'local' type and url is
 required for 'github' type.
 
 Add packages/core/package.json dependency: zod.
 
 Write packages/core/src/tests/schemas.test.ts covering:
+
 - Valid FileSummary passes validation
 - FileSummary with oversized arrays (>50 items) fails validation
 - Valid github RepoInput passes, missing url fails
@@ -65,9 +70,11 @@ Run auto-lint skill. Append entry to prompts.md
 ## Standardize monorepo testing stack on Vitest
 
 ### Goal
+
 Replace Node's native test runner with Vitest across every workspace, refactor and expand existing tests for maximum branch coverage, verify tests/lint pass, and generate a session context summary.
 
 ### User Prompt
+
 I want to standardize our testing stack across the entire monorepo to use Vitest instead of Node's native test runner (`node:test`).
 
 Please perform the following tasks:
@@ -86,7 +93,7 @@ Please perform the following tasks:
    - Run `npm run lint` to confirm code style and linting standards are maintained.
 
 4. **Context Summary Generation**:
-   - After successfully converting and passing the tests, generate a concise, high-density **Session Context Summary** in markdown format. 
+   - After successfully converting and passing the tests, generate a concise, high-density **Session Context Summary** in markdown format.
    - The summary should capture:
      1. Current monorepo architecture and package state (`core`, `cli`, `api`, `web`).
      2. All key schema and domain model decisions made so far.
@@ -99,42 +106,47 @@ Please perform the following tasks:
 ## Path traversal guard and LLM input sanitization
 
 ### Goal
+
 Implement assertSafePath(), sanitizeForLLM(), and redactSecrets() per PRD.md Section 5 and CLAUDE.md Section 4 rules 1/2/4/8, with full test coverage, then refresh SESSION_SUMMARY.md.
 
 ### User Prompt
+
 Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
 Then,
-Read PRD.md Section 5 (Security & Data Handling) and CLAUDE.md 
+Read PRD.md Section 5 (Security & Data Handling) and CLAUDE.md
 Section 4(Critical Constraints, rules 1, 2, 4, 8).
 
 Implement packages/core/src/security/path-guard.ts:
-- export function assertSafePath(targetPath: string, sandboxRoot: 
-string): string  Must resolve both paths absolutely, 
-use fs.realpathSync on sandboxRoot to  defeat symlink-based traversal, 
-verify the resolved target starts with the  resolved sandbox path, 
-throw new Error('Path traversal blocked') on violation,
-  and return the safe resolved path on success. Handle the case where 
-the target file doesn't exist yet (for write operations) by checking 
-the parent directory's realpath instead.
+
+- export function assertSafePath(targetPath: string, sandboxRoot:
+  string): string Must resolve both paths absolutely,
+  use fs.realpathSync on sandboxRoot to defeat symlink-based traversal,
+  verify the resolved target starts with the resolved sandbox path,
+  throw new Error('Path traversal blocked') on violation,
+  and return the safe resolved path on success. Handle the case where
+  the target file doesn't exist yet (for write operations) by checking
+  the parent directory's realpath instead.
 
 Implement packages/core/src/security/sanitize.ts:
+
 - export function sanitizeForLLM(content: string): string
-  Truncate to 8000 characters. 
-Replace lines matching /^(system|instruction|assistant|human):/i with a neutralized prefix "[FILTERED]: ".
+  Truncate to 8000 characters.
+  Replace lines matching /^(system|instruction|assistant|human):/i with a neutralized prefix "[FILTERED]: ".
 - export function redactSecrets(text: string): string
   Redact any substring matching /ghp_[A-Za-z0-9]{36}/ or
-  /github_pat_[A-Za-z0-9_]{22,}/ with "[REDACTED_TOKEN]". This function must be called before ANY console.log or logger call anywhere PAT 
-values might appear.
+  /github_pat_[A-Za-z0-9_]{22,}/ with "[REDACTED_TOKEN]". This function must be called before ANY console.log or logger call anywhere PAT
+  values might appear.
 
-Write packages/core/src/__tests__/security.test.ts covering:
+Write packages/core/src/**tests**/security.test.ts covering:
+
 - assertSafePath blocks ../../../etc/passwd style traversal
-- assertSafePath blocks a symlink pointing outside the sandbox 
-(create a real symlink in a temp fixture dir for this test)
+- assertSafePath blocks a symlink pointing outside the sandbox
+  (create a real symlink in a temp fixture dir for this test)
 - assertSafePath allows legitimate paths inside the sandbox
-- sanitizeForLLM truncates long content and neutralizes injection 
-patterns
-- redactSecrets correctly redacts both PAT formats and leaves normal 
-text untouched
+- sanitizeForLLM truncates long content and neutralizes injection
+  patterns
+- redactSecrets correctly redacts both PAT formats and leaves normal
+  text untouched
 
 Run auto-lint skill. Append entry to prompts.md. And in the end overwrite the content of `SESSION_SUMMARY.md` file and give the summary for the context of the current session and progress of the project.
 
@@ -143,35 +155,39 @@ Run auto-lint skill. Append entry to prompts.md. And in the end overwrite the co
 ## Sandbox directory lifecycle manager
 
 ### Goal
+
 Implement createSandbox(), cleanupSandbox(), and getSandboxSizeBytes() per CLAUDE.md Section 4 rule 1, guaranteeing temp clone directories are always cleaned up.
 
 ### User Prompt
+
 Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
 Then,
-Read CLAUDE.md Critical Constraint rule 1 
+Read CLAUDE.md Critical Constraint rule 1
 (always delete temp clone dirs).
 
 Implement packages/core/src/ingestion/sandbox-manager.ts:
-- export function createSandbox(): string
-  Creates a directory at path.join(os.tmpdir(), 'sleuth', 
-crypto.randomUUID()) using fs.mkdirSync with { recursive: true }. 
-Returns the absolute path.
-- export async function cleanupSandbox(sandboxPath: string): 
-Promise<void>
-  Deletes the directory recursively via fs.promises.rm(sandboxPath,
-  { recursive: true, force: true }). Must NEVER throw — wrap in 
-try/catch and console.warn on failure (use redactSecrets on any logged 
-path just in case, for defense in depth).
-- export function getSandboxSizeBytes(sandboxPath: string): number
-  Recursively sums file sizes under sandboxPath 
-(used later for the 100MB clone size cap).
 
-Write packages/core/src/__tests__/sandbox-manager.test.ts covering:
+- export function createSandbox(): string
+  Creates a directory at path.join(os.tmpdir(), 'sleuth',
+  crypto.randomUUID()) using fs.mkdirSync with { recursive: true }.
+  Returns the absolute path.
+- export async function cleanupSandbox(sandboxPath: string):
+  Promise<void>
+  Deletes the directory recursively via fs.promises.rm(sandboxPath,
+  { recursive: true, force: true }). Must NEVER throw — wrap in
+  try/catch and console.warn on failure (use redactSecrets on any logged
+  path just in case, for defense in depth).
+- export function getSandboxSizeBytes(sandboxPath: string): number
+  Recursively sums file sizes under sandboxPath
+  (used later for the 100MB clone size cap).
+
+Write packages/core/src/**tests**/sandbox-manager.test.ts covering:
+
 - createSandbox creates a real, empty, writable directory
 - cleanupSandbox removes it completely
 - cleanupSandbox does not throw when called on a non-existent path
-- getSandboxSizeBytes correctly sums a fixture directory with known 
-file sizes
+- getSandboxSizeBytes correctly sums a fixture directory with known
+  file sizes
 
 Run auto-lint skill. Append entry to prompts.md
 
@@ -180,9 +196,11 @@ Run auto-lint skill. Append entry to prompts.md
 ## Repo ingestion — GitHub clone and local folder ingestion
 
 ### Goal
+
 Implement cloneRepo() (validated URL, PAT-safe auth via the URL object, 100MB size-cap enforcement) and ingestLocal() (folder copy with commit-hash derivation) per PRD.md Section 4.1/5.
 
 ### User Prompt
+
 Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
 Then,
 Read PRD.md Section 4.1 and Section 5 (PAT Handling).
@@ -190,35 +208,38 @@ Read PRD.md Section 4.1 and Section 5 (PAT Handling).
 Add dependency to packages/core: simple-git.
 
 Implement packages/core/src/ingestion/clone.ts:
+
 - export async function cloneRepo(url: string, pat: string | undefined,
   targetDir: string): Promise<{ commitHash: string }>
-  Validate url against 
-/^https:\/\/github\.com\/[\w.\-]+\/[\w.\-]+(\.git)?$/
+  Validate url against
+  /^https:\/\/github\.com\/[\w.\-]+\/[\w.\-]+(\.git)?$/
   — throw a clear error if invalid. If pat is provided, construct an
   authenticated URL using the URL object (set .username = pat) — NEVER
   string concatenation. Use simpleGit().clone(authUrl, targetDir,
-  ['--depth', '1', '--single-branch']) — never child_process.exec. 
-After cloning, read the HEAD commit hash via simpleGit(targetDir).revparse(['HEAD']). Wrap errors into clear messages: 
-"Repository not found",
-  "Authentication failed — check your token", "Network error". Ensure 
-the `pat` variable is never included in any thrown error message or 
-logged anywhere (use redactSecrets defensively on any error text before logging).
+  ['--depth', '1', '--single-branch']) — never child_process.exec.
+  After cloning, read the HEAD commit hash via simpleGit(targetDir).revparse(['HEAD']). Wrap errors into clear messages:
+  "Repository not found",
+  "Authentication failed — check your token", "Network error". Ensure
+  the `pat` variable is never included in any thrown error message or
+  logged anywhere (use redactSecrets defensively on any error text before logging).
   Enforce a size cap: after clone, call getSandboxSizeBytes — if over
-  100MB, delete the sandbox and throw "Repository exceeds 100MB size 
-limit".
+  100MB, delete the sandbox and throw "Repository exceeds 100MB size
+  limit".
 
 Implement packages/core/src/ingestion/local.ts:
+
 - export async function ingestLocal(sourcePath: string, targetDir: string):
   Promise<{ commitHash: string }>
   Validate sourcePath exists and is a directory. Copy it into targetDir via
   fs.cpSync(sourcePath, targetDir, { recursive: true, filter: (src) =>
-  !src.includes('node_modules') && !src.includes('/.git/') }). If a 
-.git folder exists in sourcePath, use simple-git to read the current 
-commit hash; otherwise generate a synthetic hash via sha256 of a sorted file listing (so caching still works deterministically for non-git 
-folders).
+  !src.includes('node_modules') && !src.includes('/.git/') }). If a
+  .git folder exists in sourcePath, use simple-git to read the current
+  commit hash; otherwise generate a synthetic hash via sha256 of a sorted file listing (so caching still works deterministically for non-git
+  folders).
 
-Write packages/core/src/__tests__/ingestion.test.ts (mock simple-git,
+Write packages/core/src/**tests**/ingestion.test.ts (mock simple-git,
 no real network calls):
+
 - Valid GitHub URL triggers clone with correct depth/branch args
 - Invalid URL is rejected before any clone attempt
 - PAT is correctly embedded in the clone URL but never appears in any
@@ -233,15 +254,18 @@ Run auto-lint skill. Append entry to prompts.md
 ## Deterministic framework detector
 
 ### Goal
+
 Implement detectFrameworks() to identify frameworks, package manager, and monorepo status from package.json and lockfiles, 100% deterministic with zero LLM calls.
 
 ### User Prompt
+
 Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
 Then,
-Read PRD.md Section 4.2 and ARCHITECTURE.md's note that this module 
+Read PRD.md Section 4.2 and ARCHITECTURE.md's note that this module
 must be 100% deterministic — zero LLM calls.
 
 Implement packages/core/src/analysis/framework-detector.ts:
+
 - export interface FrameworkProfile { frameworks: string[]; packageManager:
   'npm' | 'yarn' | 'pnpm'; isMonorepo: boolean; workspaceDirs: string[]; }
 - export function detectFrameworks(repoRoot: string): FrameworkProfile
@@ -256,7 +280,7 @@ Implement packages/core/src/analysis/framework-detector.ts:
   ones in workspaceDirs. Detect packageManager by lockfile precedence:
   pnpm-lock.yaml > yarn.lock > package-lock.json > default 'npm'.
 
-Write packages/core/src/__tests__/framework-detector.test.ts with fixture
+Write packages/core/src/**tests**/framework-detector.test.ts with fixture
 package.json objects (write temp fixture dirs) covering: pure React app,
 Next.js app, Express API, NestJS API, a pnpm monorepo with apps/ and
 packages/, and a repo with no package.json at all (must not throw).
@@ -268,33 +292,36 @@ Run auto-lint skill. Append entry to prompts.md
 ## Gitignore-aware file discovery and content caching
 
 ### Goal
+
 Implement discoverFiles() — symlink-safe, binary/oversized-file-skipping, gitignore-respecting file discovery capped at 1500 files — returning FileNode[] plus a content cache per PRD.md Section 4.3.
 
 ### User Prompt
+
 Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
 Then,
 Read PRD.md Section 4.3. Add dependency to packages/core: ignore.
 
 Implement packages/core/src/analysis/discovery.ts:
+
 - export function discoverFiles(repoRoot: string, auditLog: AuditEntry[]):
   { files: FileNode[]; contentCache: Map<string, string> }
-  Parse .gitignore at repoRoot using the 'ignore' package. Hardcoded 
-folder exclusions: node_modules, .git, dist, build, coverage, .cache, 
-.next, __pycache__, generated, snapshots, __snapshots__, cypress, e2e. Hardcoded file exclusions: *.lock, package-lock.json, yarn.lock, 
-pnpm-lock.yaml, and binary extensions (png, jpg, gif, svg, ico, woff, 
-ttf, eot, mp3, mp4, zip, tar, gz, pdf, exe, dll, so). Hardcoded test 
-exclusions: *.test.*, *.spec.*, __tests__/, *.snap. Walk recursively 
-using fs.readdirSync with withFileTypes — use lstatSync and skip any 
-entry where isSymbolicLink() is true (never follow symlinks). For each candidate file, read the first 512 bytes and skip if a null byte (0x00)is found (binary detection). Enforce a hard cap: stop discovery at 1500files total — if the cap is  hit, push an AuditEntry warning: 
-"Discovery capped at 1500 files — analysis may be incomplete for very large repos". 
-While walking, read each surviving file's full content (respecting a 
-per-file 500KB size cap — skip larger files) into a Map<string, string> keyed by relative path, and return this alongside the FileNode[] list 
-so later stages never need to re-read from disk. Push a final 
-AuditEntry: "Discovered {n} files, skipped {m} ignored/binary/oversized".
+  Parse .gitignore at repoRoot using the 'ignore' package. Hardcoded
+  folder exclusions: node_modules, .git, dist, build, coverage, .cache,
+  .next, **pycache**, generated, snapshots, **snapshots**, cypress, e2e. Hardcoded file exclusions: *.lock, package-lock.json, yarn.lock,
+  pnpm-lock.yaml, and binary extensions (png, jpg, gif, svg, ico, woff,
+  ttf, eot, mp3, mp4, zip, tar, gz, pdf, exe, dll, so). Hardcoded test
+  exclusions: _.test._, _.spec._, **tests**/, *.snap. Walk recursively
+  using fs.readdirSync with withFileTypes — use lstatSync and skip any
+  entry where isSymbolicLink() is true (never follow symlinks). For each candidate file, read the first 512 bytes and skip if a null byte (0x00)is found (binary detection). Enforce a hard cap: stop discovery at 1500files total — if the cap is hit, push an AuditEntry warning:
+  "Discovery capped at 1500 files — analysis may be incomplete for very large repos".
+  While walking, read each surviving file's full content (respecting a
+  per-file 500KB size cap — skip larger files) into a Map<string, string> keyed by relative path, and return this alongside the FileNode[] list
+  so later stages never need to re-read from disk. Push a final
+  AuditEntry: "Discovered {n} files, skipped {m} ignored/binary/oversized".
 
-Write packages/core/src/__tests__/discovery.test.ts using a temp 
-fixture directory containing: normal source files, a .gitignore 
-excluding a specific subfolder, a binary file (write actual null bytes),a symlink pointing outside the fixture dir, a node_modules folder, and afile over 500KB. Assert the returned file list correctly excludes all ofthe above and the contentCache contains correct content for surviving 
+Write packages/core/src/**tests**/discovery.test.ts using a temp
+fixture directory containing: normal source files, a .gitignore
+excluding a specific subfolder, a binary file (write actual null bytes),a symlink pointing outside the fixture dir, a node_modules folder, and afile over 500KB. Assert the returned file list correctly excludes all ofthe above and the contentCache contains correct content for surviving
 files.
 
 Run auto-lint skill. Append entry to prompts.md
@@ -304,38 +331,42 @@ Run auto-lint skill. Append entry to prompts.md
 ## Import graph and symbol indexer
 
 ### Goal
+
 Implement buildImportGraph() (regex-based relative-import resolution with in-degree counts) and indexSymbols()/buildSymbolIndex() (exported-symbol extraction) per ARCHITECTURE.md Sections 4.2 and 8.
 
 ### User Prompt
+
 Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
 Then,
-Read ARCHITECTURE.md Section 4.2 (ImportScore) and Section 8 
+Read ARCHITECTURE.md Section 4.2 (ImportScore) and Section 8
 (documented limitation: only relative imports resolved, no AST parsing).
 Implement packages/core/src/analysis/import-graph.ts:
+
 - export interface ImportGraph { inDegree: Map<string, number>; }
 - export function buildImportGraph(files: FileNode[], contentCache:
   Map<string, string>): ImportGraph
-For each file's content, apply these regexes to find import specifiers:
-  /import\s+.*?\s+from\s+['"](.+?)['"]/g, /require\(\s*['"](.+?)['"]\s*\)/g,
-  /import\(\s*['"](.+?)['"]\s*\)/g. Only process specifiers starting 
-with  './' or '../' — skip everything else (bare specifiers, aliases). Resolve the relative path against the importing file's directory, 
-trying exact match first, then appending .ts/.tsx/.js/.jsx, then tryingan /index variant of each extension, against the known `files` list. 
-Increment inDegree for each successfully resolved target. 
-Return { inDegree }.
+  For each file's content, apply these regexes to find import specifiers:
+  /import\s+._?\s+from\s+['"](.+?)['"]/g, /require\(\s_['"](.+?)['"]\s*\)/g,
+  /import\(\s*['"](.+?)['"]\s*\)/g. Only process specifiers starting
+  with './' or '../' — skip everything else (bare specifiers, aliases). Resolve the relative path against the importing file's directory,
+  trying exact match first, then appending .ts/.tsx/.js/.jsx, then tryingan /index variant of each extension, against the known `files` list.
+  Increment inDegree for each successfully resolved target.
+  Return { inDegree }.
 
 Implement packages/core/src/analysis/symbol-indexer.ts:
-- export function indexSymbols(filePath: string, content: string): 
-Symbol[] Scan line-by-line for these patterns (reset regex lastIndex 
-per line): export (async )?function (\w+) — type 'function'; export 
-class (\w+) — type 'class'; export (default )?const (\w+) — type 
-'const'; export \{([^}]+)\} — type 'export' (split the captured group 
-on commas, trim each name, push one Symbol per name). Record the 
-1-indexed line number for each match.
-- export function buildSymbolIndex(files: FileNode[], contentCache:
-Map<string,string>): Map<string, Array<{path: string; line: number}>>
-Runs indexSymbols across all files and builds a symbolName → locations map for later citation lookups (multiple files may export the same name).
 
-Write packages/core/src/__tests__/import-graph.test.ts and
+- export function indexSymbols(filePath: string, content: string):
+  Symbol[] Scan line-by-line for these patterns (reset regex lastIndex
+  per line): export (async )?function (\w+) — type 'function'; export
+  class (\w+) — type 'class'; export (default )?const (\w+) — type
+  'const'; export \{([^}]+)\} — type 'export' (split the captured group
+  on commas, trim each name, push one Symbol per name). Record the
+  1-indexed line number for each match.
+- export function buildSymbolIndex(files: FileNode[], contentCache:
+  Map<string,string>): Map<string, Array<{path: string; line: number}>>
+  Runs indexSymbols across all files and builds a symbolName → locations map for later citation lookups (multiple files may export the same name).
+
+Write packages/core/src/**tests**/import-graph.test.ts and
 symbol-indexer.test.ts with fixture files containing known import
 relationships (including a circular import — must not infinite loop)
 and known exports, asserting correct inDegree counts and correct
@@ -348,14 +379,17 @@ Run auto-lint skill. Append entry to prompts.md
 ## Priority scoring algorithm and entry point detection
 
 ### Goal
+
 Implement the exact tiered priority-scoring formula (computePathScore, detectEntryPoints, scoreFile, prioritizeFiles) from ARCHITECTURE.md Section 4, with full test coverage.
 
 ### User Prompt
-Read ARCHITECTURE.md Section 4 (Complete Priority Scoring Formula 
-Mechanics) in full — implement it EXACTLY as specified, including the 
-tiered  PATH_SCORE_RULES table with all 6 tiers.
+
+Read ARCHITECTURE.md Section 4 (Complete Priority Scoring Formula
+Mechanics) in full — implement it EXACTLY as specified, including the
+tiered PATH_SCORE_RULES table with all 6 tiers.
 
 Implement packages/core/src/analysis/prioritizer.ts:
+
 - const PATH_SCORE_RULES: Array<{ pattern: RegExp; score: number }>
   exactly matching the 6-tier table from ARCHITECTURE.md Section 4.1.
 - export function computePathScore(path: string): number
@@ -369,16 +403,17 @@ Implement packages/core/src/analysis/prioritizer.ts:
   entryPoints: Set<string>): number
   Returns computePathScore(file.path) + Math.min((importGraph.inDegree.get(file.path) || 0) * 4, 40) + (entryPoints.has(file.path) ? 30 : 0).
 - export function prioritizeFiles(files: FileNode[], importGraph:
-  ImportGraph, entryPoints: Set<string>, auditLog: AuditEntry[], 
-maxFiles = 150): FileNode[] Scores every file, sorts descending by 
-score, pushes an AuditEntry logging the top 20 files with their scores,and returns the top maxFiles entries (each with its `score` field 
-populated).
+  ImportGraph, entryPoints: Set<string>, auditLog: AuditEntry[],
+  maxFiles = 150): FileNode[] Scores every file, sorts descending by
+  score, pushes an AuditEntry logging the top 20 files with their scores,and returns the top maxFiles entries (each with its `score` field
+  populated).
 
-Write packages/core/src/__tests__/prioritizer.test.ts covering:
+Write packages/core/src/**tests**/prioritizer.test.ts covering:
+
 - package.json scores exactly 100
 - A file matching an entry-point signature receives the +30 bonus
-- A test file (e.g. foo.test.ts, if it somehow reaches this stage) 
-scores at baseline, not elevated
+- A test file (e.g. foo.test.ts, if it somehow reaches this stage)
+  scores at baseline, not elevated
 - A file imported by 15 others gets importScore capped at 40, not 60
 - prioritizeFiles correctly sorts descending and truncates to maxFiles
 
@@ -389,22 +424,24 @@ Run auto-lint skill. Append entry to prompts.md
 ## Ad-hoc multi-package (sub-project) framework detection
 
 ### Goal
+
 Extend detectFrameworks() to generically detect independent sub-projects — any folder name, each with its own package.json — when no formal monorepo tooling is wired up, exposing a per-sub-project breakdown.
 
 ### User Prompt
+
 Read PRD.md and ARCHITECTURE.md Section 4.2 (Framework Detection) for context.
 
-CURRENT STATE: packages/core/src/analysis/framework-detector.ts currently 
-only reads a root-level package.json to detect frameworks. This means any 
-repository split into independent sub-folders (e.g. backend/ + frontend/, 
-or client/ + server/, or any other naming convention) where EACH folder 
-has its own package.json and is NOT wired up via formal monorepo tooling 
-(no pnpm-workspace.yaml, no turbo.json, no root "workspaces" field) is 
+CURRENT STATE: packages/core/src/analysis/framework-detector.ts currently
+only reads a root-level package.json to detect frameworks. This means any
+repository split into independent sub-folders (e.g. backend/ + frontend/,
+or client/ + server/, or any other naming convention) where EACH folder
+has its own package.json and is NOT wired up via formal monorepo tooling
+(no pnpm-workspace.yaml, no turbo.json, no root "workspaces" field) is
 currently mis-profiled as frameworks: [], isMonorepo: false.
 
-This task adds "ad-hoc multi-package" detection as a new capability. 
+This task adds "ad-hoc multi-package" detection as a new capability.
 Sub-project folder names must NOT be hardcoded anywhere (not "backend"/
-"frontend" specifically) — the detection must work generically for ANY 
+"frontend" specifically) — the detection must work generically for ANY
 top-level folder name.
 
 ---
@@ -413,26 +450,26 @@ top-level folder name.
 
 Add a new interface:
 
-  export interface SubProjectProfile {
-    rootRelativePath: string;  // e.g. "backend", "client", "" for root
-    frameworks: string[];
-    packageManager: 'npm' | 'yarn' | 'pnpm';
-    entryPoints: string[];     // populated later by prioritizer.ts — 
-                                 // initialize as [] here
-  }
+export interface SubProjectProfile {
+rootRelativePath: string; // e.g. "backend", "client", "" for root
+frameworks: string[];
+packageManager: 'npm' | 'yarn' | 'pnpm';
+entryPoints: string[]; // populated later by prioritizer.ts —
+// initialize as [] here
+}
 
 Update FrameworkProfile to:
 
-  export interface FrameworkProfile {
-    frameworks: string[];              // deduplicated union across all sub-projects
-    packageManager: 'npm' | 'yarn' | 'pnpm';
-    isMonorepo: boolean;
-    monorepoType: 'workspace' | 'ad-hoc' | 'none';
-    workspaceDirs: string[];
-    subProjects: SubProjectProfile[];
-  }
+export interface FrameworkProfile {
+frameworks: string[]; // deduplicated union across all sub-projects
+packageManager: 'npm' | 'yarn' | 'pnpm';
+isMonorepo: boolean;
+monorepoType: 'workspace' | 'ad-hoc' | 'none';
+workspaceDirs: string[];
+subProjects: SubProjectProfile[];
+}
 
-Update RepoMeta to add these same new fields (monorepoType, subProjects) 
+Update RepoMeta to add these same new fields (monorepoType, subProjects)
 alongside its existing frameworks/isMonorepo/workspaceDirs fields.
 
 ---
@@ -441,71 +478,72 @@ alongside its existing frameworks/isMonorepo/workspaceDirs fields.
 
 detectFrameworks(repoRoot: string): FrameworkProfile must now:
 
-a) Keep existing logic for FORMAL monorepo markers at root 
-   (pnpm-workspace.yaml, lerna.json, turbo.json, nx.json, or root 
-   package.json "workspaces" field). If found, set monorepoType = 
-   'workspace' and keep existing apps/packages/libs/shared detection for 
-   workspaceDirs.
+a) Keep existing logic for FORMAL monorepo markers at root
+(pnpm-workspace.yaml, lerna.json, turbo.json, nx.json, or root
+package.json "workspaces" field). If found, set monorepoType =
+'workspace' and keep existing apps/packages/libs/shared detection for
+workspaceDirs.
 
-b) NEW — if no formal markers exist: scan every top-level directory 
-   (depth 1 only, excluding node_modules/.git/dist/build/coverage/.cache 
-   and other standard ignored folders) for a package.json directly inside 
-   it. Do this for EVERY directory name found — do not hardcode any 
-   specific names.
+b) NEW — if no formal markers exist: scan every top-level directory
+(depth 1 only, excluding node_modules/.git/dist/build/coverage/.cache
+and other standard ignored folders) for a package.json directly inside
+it. Do this for EVERY directory name found — do not hardcode any
+specific names.
 
-c) For the root package.json (if it exists) AND every nested one found 
-   in (b), run the existing framework-matching logic (next, react, 
-   express, @nestjs/core, vite dependency checks) independently, 
-   producing one SubProjectProfile per package.json found, with 
-   entryPoints initialized to [].
+c) For the root package.json (if it exists) AND every nested one found
+in (b), run the existing framework-matching logic (next, react,
+express, @nestjs/core, vite dependency checks) independently,
+producing one SubProjectProfile per package.json found, with
+entryPoints initialized to [].
 
 d) Compute final FrameworkProfile fields:
-   - frameworks: deduplicated union of all frameworks across every subProject
-   - isMonorepo: true if monorepoType === 'workspace' OR subProjects.length > 1
-   - monorepoType: 'workspace' if formal markers found, else 'ad-hoc' if 
-     subProjects.length > 1, else 'none'
-   - workspaceDirs: for the ad-hoc case, each subProject's rootRelativePath 
-     (excluding the root "" entry)
-   - packageManager: from root's lockfile if root package.json exists, 
-     else from the first subProject found
-   - subProjects: the array built in (c)
 
-e) Handle a repo with NO package.json anywhere (root or nested) 
-   gracefully: return frameworks: [], subProjects: [], monorepoType: 
-   'none', without throwing.
+- frameworks: deduplicated union of all frameworks across every subProject
+- isMonorepo: true if monorepoType === 'workspace' OR subProjects.length > 1
+- monorepoType: 'workspace' if formal markers found, else 'ad-hoc' if
+  subProjects.length > 1, else 'none'
+- workspaceDirs: for the ad-hoc case, each subProject's rootRelativePath
+  (excluding the root "" entry)
+- packageManager: from root's lockfile if root package.json exists,
+  else from the first subProject found
+- subProjects: the array built in (c)
+
+e) Handle a repo with NO package.json anywhere (root or nested)
+gracefully: return frameworks: [], subProjects: [], monorepoType:
+'none', without throwing.
 
 ---
 
-3. UPDATE packages/core/src/__tests__/framework-detector.test.ts:
+3. UPDATE packages/core/src/**tests**/framework-detector.test.ts:
 
-Add a fixture-based test using "client"/"server" naming (deliberately 
+Add a fixture-based test using "client"/"server" naming (deliberately
 NOT "backend"/"frontend", to prove genericness):
 
-  fixture-root/
-    server/
-      package.json  (dependencies: { express: "^4.0.0" })
-    client/
-      package.json  (dependencies: { react: "^18.0.0", vite: "^5.0.0" })
+fixture-root/
+server/
+package.json (dependencies: { express: "^4.0.0" })
+client/
+package.json (dependencies: { react: "^18.0.0", vite: "^5.0.0" })
 
-Assert: frameworks contains 'express', 'react', 'vite'; isMonorepo === 
-true; monorepoType === 'ad-hoc'; workspaceDirs contains 'server' and 
-'client'; subProjects.length === 2 with correct rootRelativePath values 
+Assert: frameworks contains 'express', 'react', 'vite'; isMonorepo ===
+true; monorepoType === 'ad-hoc'; workspaceDirs contains 'server' and
+'client'; subProjects.length === 2 with correct rootRelativePath values
 and each entryPoints === [].
 
-Add a regression test confirming a single root-level package.json (no 
-nested ones) still produces monorepoType: 'none', isMonorepo: false, 
-subProjects.length === 1 (just the root entry) — exactly matching prior 
+Add a regression test confirming a single root-level package.json (no
+nested ones) still produces monorepoType: 'none', isMonorepo: false,
+subProjects.length === 1 (just the root entry) — exactly matching prior
 single-project behavior.
 
-Add a test confirming zero package.json anywhere produces an empty, 
+Add a test confirming zero package.json anywhere produces an empty,
 non-throwing result.
 
 ---
 
-Run lint --fix. Run the full test suite (npm run test --workspaces) and 
-confirm no regressions in framework-detector tests. Append an entry to 
-prompts.md per the CLAUDE.md format. Do NOT touch prioritizer.ts, 
-pipeline.ts, or any other file in this task — this is scoped strictly to 
+Run lint --fix. Run the full test suite (npm run test --workspaces) and
+confirm no regressions in framework-detector tests. Append an entry to
+prompts.md per the CLAUDE.md format. Do NOT touch prioritizer.ts,
+pipeline.ts, or any other file in this task — this is scoped strictly to
 framework-detector.ts and types.ts.
 
 ---
@@ -513,32 +551,34 @@ framework-detector.ts and types.ts.
 ## Per-sub-project entry point attribution
 
 ### Goal
+
 Make detectEntryPoints() sub-project-aware so each detected sub-project gets its own correctly attributed entry points instead of one ambiguous flat list, generically via rootRelativePath (no hardcoded folder names).
 
 ### User Prompt
-Read PRD.md and ARCHITECTURE.md Section 4.2 (Framework Detection) for context, along with the prior fix that made 
-detectFrameworks() detect ad-hoc multi-package repos (e.g. backend/ + 
-frontend/, or client/ + server/, or any other generically-named top-level 
+
+Read PRD.md and ARCHITECTURE.md Section 4.2 (Framework Detection) for context, along with the prior fix that made
+detectFrameworks() detect ad-hoc multi-package repos (e.g. backend/ +
+frontend/, or client/ + server/, or any other generically-named top-level
 folders each containing their own package.json).
 
-ISSUE FOUND: While detectFrameworks() now correctly identifies multiple 
-independent sub-projects and their individual frameworks, entry point 
-detection (detectEntryPoints in prioritizer.ts) still returns a single 
-FLAT, repo-wide Set<string> of entry point paths. This means we currently 
-know "this repo has entry points at backend/server.ts AND 
-frontend/src/main.tsx" but we do NOT know which entry point belongs to 
-which sub-project. For a split repo, this distinction matters — the 
-backend's runtime bootstrap and the frontend's runtime bootstrap are 
-architecturally separate and must be documented/cited separately later 
-(e.g. in ONBOARDING.md: "To run the backend: ... entry point 
-backend/server.ts [backend/server.ts:12]. To run the frontend: ... entry 
+ISSUE FOUND: While detectFrameworks() now correctly identifies multiple
+independent sub-projects and their individual frameworks, entry point
+detection (detectEntryPoints in prioritizer.ts) still returns a single
+FLAT, repo-wide Set<string> of entry point paths. This means we currently
+know "this repo has entry points at backend/server.ts AND
+frontend/src/main.tsx" but we do NOT know which entry point belongs to
+which sub-project. For a split repo, this distinction matters — the
+backend's runtime bootstrap and the frontend's runtime bootstrap are
+architecturally separate and must be documented/cited separately later
+(e.g. in ONBOARDING.md: "To run the backend: ... entry point
+backend/server.ts [backend/server.ts:12]. To run the frontend: ... entry
 point frontend/src/main.tsx [frontend/src/main.tsx:5]").
 
-IMPORTANT CONSTRAINT: Sub-project folder names are NOT guaranteed to be 
-"backend"/"frontend" — they could be "client"/"server", "api"/"web", 
-"apps/api"/"apps/dashboard", or any other naming convention. The fix must 
-work generically based on the ALREADY-DETECTED subProjects list (from the 
-prior fix) and their rootRelativePath values — do NOT hardcode any 
+IMPORTANT CONSTRAINT: Sub-project folder names are NOT guaranteed to be
+"backend"/"frontend" — they could be "client"/"server", "api"/"web",
+"apps/api"/"apps/dashboard", or any other naming convention. The fix must
+work generically based on the ALREADY-DETECTED subProjects list (from the
+prior fix) and their rootRelativePath values — do NOT hardcode any
 specific folder names anywhere in this fix.
 
 Fix as follows:
@@ -549,45 +589,45 @@ Fix as follows:
 
 Update SubProjectProfile to add a new field:
 
-  export interface SubProjectProfile {
-    rootRelativePath: string;
-    frameworks: string[];
-    packageManager: 'npm' | 'yarn' | 'pnpm';
-    entryPoints: string[];   // NEW — populated after discovery, relative 
-                              // to repo root, e.g. "backend/server.ts"
-  }
+export interface SubProjectProfile {
+rootRelativePath: string;
+frameworks: string[];
+packageManager: 'npm' | 'yarn' | 'pnpm';
+entryPoints: string[]; // NEW — populated after discovery, relative
+// to repo root, e.g. "backend/server.ts"
+}
 
 Update RepoMeta to add:
 
-  export interface RepoMeta {
-    name: string;
-    identifier: string;
-    commitHash: string;
-    rootPath: string;
-    frameworks: string[];
-    isMonorepo: boolean;
-    monorepoType: 'workspace' | 'ad-hoc' | 'none';
-    workspaceDirs: string[];
-    packageManager: 'npm' | 'yarn' | 'pnpm';
-    subProjects: SubProjectProfile[];   // NEW — full breakdown including 
-                                          // per-project entryPoints
-  }
+export interface RepoMeta {
+name: string;
+identifier: string;
+commitHash: string;
+rootPath: string;
+frameworks: string[];
+isMonorepo: boolean;
+monorepoType: 'workspace' | 'ad-hoc' | 'none';
+workspaceDirs: string[];
+packageManager: 'npm' | 'yarn' | 'pnpm';
+subProjects: SubProjectProfile[]; // NEW — full breakdown including
+// per-project entryPoints
+}
 
 ---
 
 2. UPDATE packages/core/src/analysis/framework-detector.ts:
 
-When constructing each SubProjectProfile object (both the root one, if a 
-root package.json exists, and every nested one found via the depth-1 
-scan), initialize entryPoints: [] — this field stays empty at this stage 
-because framework detection runs BEFORE file discovery/content-caching in 
-the pipeline order (Framework Detection happens before Discovery per 
-ARCHITECTURE.md Section 7). It will be populated later in prioritizer.ts 
+When constructing each SubProjectProfile object (both the root one, if a
+root package.json exists, and every nested one found via the depth-1
+scan), initialize entryPoints: [] — this field stays empty at this stage
+because framework detection runs BEFORE file discovery/content-caching in
+the pipeline order (Framework Detection happens before Discovery per
+ARCHITECTURE.md Section 7). It will be populated later in prioritizer.ts
 once file contents are available.
 
-No other logic changes needed in this file — the generic depth-1 
-directory scan already in place correctly handles ANY folder naming 
-convention (backend/frontend, client/server, api/web, etc.) since it 
+No other logic changes needed in this file — the generic depth-1
+directory scan already in place correctly handles ANY folder naming
+convention (backend/frontend, client/server, api/web, etc.) since it
 checks every top-level directory for a package.json regardless of name.
 
 ---
@@ -596,160 +636,163 @@ checks every top-level directory for a package.json regardless of name.
 
 Rewrite detectEntryPoints to be sub-project-aware:
 
-  export function detectEntryPoints(
-    files: FileNode[],
-    contentCache: Map<string, string>,
-    subProjects: SubProjectProfile[]
-  ): { global: Set<string>; bySubProject: Map<string, string[]> }
+export function detectEntryPoints(
+files: FileNode[],
+contentCache: Map<string, string>,
+subProjects: SubProjectProfile[]
+): { global: Set<string>; bySubProject: Map<string, string[]> }
 
 Logic:
 
-a) Keep the existing signature list unchanged: app.listen(, createServer(, 
-   ReactDOM.createRoot(, ReactDOM.render(, NestFactory.create(
+a) Keep the existing signature list unchanged: app.listen(, createServer(,
+ReactDOM.createRoot(, ReactDOM.render(, NestFactory.create(
 
-b) EDGE CASE — if subProjects.length === 0 (no package.json found 
-   anywhere in the repo): scan ALL files against the signatures as a 
-   single implicit group, return { global: <matched paths>, 
-   bySubProject: new Map() } (empty map since there are no formal 
-   sub-projects to attribute entry points to).
+b) EDGE CASE — if subProjects.length === 0 (no package.json found
+anywhere in the repo): scan ALL files against the signatures as a
+single implicit group, return { global: <matched paths>,
+bySubProject: new Map() } (empty map since there are no formal
+sub-projects to attribute entry points to).
 
-c) NORMAL CASE — if subProjects.length >= 1: for each subProject, 
-   determine which files "belong" to it using this rule:
-   - If subProject.rootRelativePath === '' (the root project): a file 
-     belongs to it if its path does NOT start with 
-     `${otherSubProject.rootRelativePath}/` for ANY other subProject in 
-     the list (this correctly excludes files that live inside nested 
-     sub-project folders from being double-counted under the root).
-   - If subProject.rootRelativePath is non-empty (e.g. "backend", 
-     "apps/api"): a file belongs to it if its path starts with 
-     `${subProject.rootRelativePath}/`.
+c) NORMAL CASE — if subProjects.length >= 1: for each subProject,
+determine which files "belong" to it using this rule:
 
-   For each subProject's file subset, scan for signature matches exactly 
-   as before. Store the matched paths in bySubProject.set(subProject.
-   rootRelativePath, matchedPaths).
+- If subProject.rootRelativePath === '' (the root project): a file
+  belongs to it if its path does NOT start with
+  `${otherSubProject.rootRelativePath}/` for ANY other subProject in
+  the list (this correctly excludes files that live inside nested
+  sub-project folders from being double-counted under the root).
+- If subProject.rootRelativePath is non-empty (e.g. "backend",
+  "apps/api"): a file belongs to it if its path starts with
+  `${subProject.rootRelativePath}/`.
 
-d) Build global: Set<string> as the union of every array in bySubProject 
-   (or the single implicit group's results in the edge case from step b). 
-   This global set is what continues to feed the existing 
-   EntryPointBonus scoring logic in scoreFile() — that scoring logic 
-   itself does NOT need to change; a file still gets the flat +30 bonus 
-   if it's in the global set, regardless of which sub-project it belongs to.
+For each subProject's file subset, scan for signature matches exactly
+as before. Store the matched paths in bySubProject.set(subProject.
+rootRelativePath, matchedPaths).
+
+d) Build global: Set<string> as the union of every array in bySubProject
+(or the single implicit group's results in the edge case from step b).
+This global set is what continues to feed the existing
+EntryPointBonus scoring logic in scoreFile() — that scoring logic
+itself does NOT need to change; a file still gets the flat +30 bonus
+if it's in the global set, regardless of which sub-project it belongs to.
 
 e) Return { global, bySubProject }.
 
-Update the calling code in prioritizeFiles() (or wherever 
-detectEntryPoints was previously called) to destructure { global } for 
-the existing scoring logic, and separately expose { bySubProject } so the 
+Update the calling code in prioritizeFiles() (or wherever
+detectEntryPoints was previously called) to destructure { global } for
+the existing scoring logic, and separately expose { bySubProject } so the
 pipeline can write it back into the FrameworkProfile's subProjects array.
 
 ---
 
 4. UPDATE packages/core/src/pipeline.ts:
-IGNORE THIS STEP!
+   IGNORE THIS STEP!
+
 ---
 
-5. UPDATE packages/core/src/__tests__/prioritizer.test.ts:
+5. UPDATE packages/core/src/**tests**/prioritizer.test.ts:
 
-Add test cases using a fixture with TWO differently-named sub-projects 
-(use "client" and "server" instead of "backend"/"frontend" this time, 
+Add test cases using a fixture with TWO differently-named sub-projects
+(use "client" and "server" instead of "backend"/"frontend" this time,
 specifically to prove the fix is generic and not name-hardcoded):
 
-  fixture-root/
-    server/
-      package.json  (dependencies: { express: "^4.0.0" })
-      index.ts      (contains: app.listen(3000))
-    client/
-      package.json  (dependencies: { react: "^18.0.0" })
-      src/main.tsx  (contains: ReactDOM.createRoot(...))
+fixture-root/
+server/
+package.json (dependencies: { express: "^4.0.0" })
+index.ts (contains: app.listen(3000))
+client/
+package.json (dependencies: { react: "^18.0.0" })
+src/main.tsx (contains: ReactDOM.createRoot(...))
 
-Build the subProjects array manually for this fixture (rootRelativePath: 
-"server" and "client"), then call detectEntryPoints(files, contentCache, 
+Build the subProjects array manually for this fixture (rootRelativePath:
+"server" and "client"), then call detectEntryPoints(files, contentCache,
 subProjects) and assert:
-  - bySubProject.get("server") contains "server/index.ts"
-  - bySubProject.get("client") contains "client/src/main.tsx"
-  - global contains BOTH paths
-  - bySubProject.get("server") does NOT contain "client/src/main.tsx" 
-    (proves correct isolation between sub-projects)
 
-Also add a regression test for the original single-project case (no 
-sub-projects, subProjects = [{ rootRelativePath: '', ... }]) confirming 
-entry points are still correctly attributed to the root "" key and 
+- bySubProject.get("server") contains "server/index.ts"
+- bySubProject.get("client") contains "client/src/main.tsx"
+- global contains BOTH paths
+- bySubProject.get("server") does NOT contain "client/src/main.tsx"
+  (proves correct isolation between sub-projects)
+
+Also add a regression test for the original single-project case (no
+sub-projects, subProjects = [{ rootRelativePath: '', ... }]) confirming
+entry points are still correctly attributed to the root "" key and
 appear in global as before.
 
-Also add the edge-case test for subProjects.length === 0 (no package.json 
-anywhere) confirming global still populates correctly via the fallback 
+Also add the edge-case test for subProjects.length === 0 (no package.json
+anywhere) confirming global still populates correctly via the fallback
 whole-repo scan and bySubProject is an empty Map.
 
 ---
 
-6. UPDATE (or CREATE if it doesn't exist yet) 
-packages/core/src/__tests__/pipeline.test.ts:
+6. UPDATE (or CREATE if it doesn't exist yet)
+   packages/core/src/**tests**/pipeline.test.ts:
 
-Add a test using a fixture repo structured like the "client"/"server" 
-example above, run the FULL runPipeline() (with LLM calls mocked), and 
-assert that the returned result.meta.subProjects array has exactly 2 
-entries, each with the correct rootRelativePath, frameworks, and a 
-non-empty entryPoints array pointing to the correct file for that 
+Add a test using a fixture repo structured like the "client"/"server"
+example above, run the FULL runPipeline() (with LLM calls mocked), and
+assert that the returned result.meta.subProjects array has exactly 2
+entries, each with the correct rootRelativePath, frameworks, and a
+non-empty entryPoints array pointing to the correct file for that
 specific sub-project (not the other one).
 
 ---
 
-7. UPDATE packages/core/manual-test-scoring.ts (the temporary diagnostic 
-script):
+7. UPDATE packages/core/manual-test-scoring.ts (the temporary diagnostic
+   script):
 
-In the section that prints framework detection results, after listing 
-subProjects (rootRelativePath, frameworks, packageManager), add a new 
+In the section that prints framework detection results, after listing
+subProjects (rootRelativePath, frameworks, packageManager), add a new
 column/line per sub-project showing its entryPoints array, e.g.:
 
-  Sub-project: server
-    Frameworks: express
-    Package Manager: npm
-    Entry Points: server/index.ts
+Sub-project: server
+Frameworks: express
+Package Manager: npm
+Entry Points: server/index.ts
 
-  Sub-project: client
-    Frameworks: react, vite
-    Package Manager: npm
-    Entry Points: client/src/main.tsx
+Sub-project: client
+Frameworks: react, vite
+Package Manager: npm
+Entry Points: client/src/main.tsx
 
-If a sub-project has an empty entryPoints array, print a warning line: 
+If a sub-project has an empty entryPoints array, print a warning line:
 "⚠️ No entry point detected for sub-project '{path}' — may need manual review"
 
-In the SANITY CHECKS section, add: if subProjects.length > 1, assert that 
-AT LEAST ONE sub-project has a non-empty entryPoints array, print ✅/❌ 
-accordingly, and print how many sub-projects total have zero detected 
-entry points as an informational count (not necessarily a failure, since 
-some sub-projects — e.g. a shared utils package — legitimately have no 
+In the SANITY CHECKS section, add: if subProjects.length > 1, assert that
+AT LEAST ONE sub-project has a non-empty entryPoints array, print ✅/❌
+accordingly, and print how many sub-projects total have zero detected
+entry points as an informational count (not necessarily a failure, since
+some sub-projects — e.g. a shared utils package — legitimately have no
 runtime entry point).
 
 ---
 
 8. UPDATE ARCHITECTURE.md:
 
-Extend the subsection added in the previous fix (about ad-hoc 
-multi-package detection) with: "Entry point detection is performed 
-per-sub-project by attributing each discovered file to its owning 
+Extend the subsection added in the previous fix (about ad-hoc
+multi-package detection) with: "Entry point detection is performed
+per-sub-project by attributing each discovered file to its owning
 sub-project via path-prefix matching against subProjects[].
-rootRelativePath, then running the same signature-based scan 
-(app.listen(, ReactDOM.createRoot(, etc.) independently within each 
-sub-project's file subset. This ensures a split repository (regardless of 
-folder naming — backend/frontend, client/server, api/web, or otherwise) 
-produces distinct, correctly-attributed entry points per sub-project 
-rather than a single ambiguous flat list, enabling accurate per-project 
-onboarding instructions in later documentation stages. A sub-project with 
-zero detected entry points (e.g. a shared library package with no runtime 
+rootRelativePath, then running the same signature-based scan
+(app.listen(, ReactDOM.createRoot(, etc.) independently within each
+sub-project's file subset. This ensures a split repository (regardless of
+folder naming — backend/frontend, client/server, api/web, or otherwise)
+produces distinct, correctly-attributed entry points per sub-project
+rather than a single ambiguous flat list, enabling accurate per-project
+onboarding instructions in later documentation stages. A sub-project with
+zero detected entry points (e.g. a shared library package with no runtime
 bootstrap) is valid and not treated as an error."
 
 ---
 
-Run lint --fix across all changed files. Run the full test suite 
-(npm run test --workspaces) and confirm no existing tests regress, 
-especially the earlier ad-hoc multi-package detection tests from the 
-previous fix. Append an entry to prompts.md documenting this fix per the 
+Run lint --fix across all changed files. Run the full test suite
+(npm run test --workspaces) and confirm no existing tests regress,
+especially the earlier ad-hoc multi-package detection tests from the
+previous fix. Append an entry to prompts.md documenting this fix per the
 CLAUDE.md format.
 
-NOTE: pipeline.ts does not exist yet — do NOT create or modify it in this 
-task. The `frameworkProfile.subProjects` → `repoMeta.subProjects` wiring 
-described for "pipeline.ts" will happen naturally when pipeline.ts is 
+NOTE: pipeline.ts does not exist yet — do NOT create or modify it in this
+task. The `frameworkProfile.subProjects` → `repoMeta.subProjects` wiring
+described for "pipeline.ts" will happen naturally when pipeline.ts is
 built in its own upcoming task; skip step 4 of this prompt entirely for now.
 
 ---
@@ -757,9 +800,11 @@ built in its own upcoming task; skip step 4 of this prompt entirely for now.
 ## SQLite-backed summary cache (SummaryCache)
 
 ### Goal
+
 Implement the `better-sqlite3`-backed `SummaryCache` class per ARCHITECTURE.md Section 5's schema (cache_key/file_path/content_hash/summary_json/created_at, 7-day TTL, idx_file_path index), with deterministic key/content hashing and in-memory hit/miss stats, plus a dry-run unit test suite against an in-memory database.
 
 ### User Prompt
+
 Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
 Then,
 Read ARCHITECTURE.md Section 5 (SQLite Cache Schema Definition).
@@ -767,6 +812,7 @@ Read ARCHITECTURE.md Section 5 (SQLite Cache Schema Definition).
 Add dependency to packages/core: better-sqlite3, @types/better-sqlite3.
 
 Implement packages/core/src/cache/sqlite-cache.ts:
+
 - export class SummaryCache
   constructor(dbPath?: string) — default to path.join(os.homedir(),
   '.sleuth', 'cache.sqlite'), ensure the directory exists via mkdirSync
@@ -789,8 +835,9 @@ Implement packages/core/src/cache/sqlite-cache.ts:
     expose a resetStats() too.
   - close(): void — closes the underlying database handle.
 
-Write packages/core/src/__tests__/sqlite-cache.test.ts using an in-memory
+Write packages/core/src/**tests**/sqlite-cache.test.ts using an in-memory
 db (':memory:' path) covering:
+
 - set then get returns the same summary
 - get on a non-existent key returns null and increments misses
 - get on an entry older than 7 days (manually insert with an old
@@ -805,18 +852,22 @@ Run auto-lint skill. Append entry to prompts.md
 ## LLM Provider Chain & Rate Limiter
 
 ### Goal
+
 Implement the Groq-primary/Gemini-fallback LLM provider abstraction and a token-bucket rate limiter, with a fetch-mocked dry-run test suite covering retry, fallback, and throttling behavior — no real network calls.
 
 ### User Prompt
+
 Read CLAUDE.md Section 1 (LLM Providers: Groq primary, Gemini fallback,
 free tier only) and PRD.md Section 5 (LLM outputs must be Zod-validated
 by the caller, not this module).
 
 Implement packages/core/src/llm/rate-limiter.ts:
+
 - export class TokenBucketRateLimiter constructor(maxTokens: number, refillRatePerSecond: number)
 - async waitForToken(): Promise<void> — refills based on elapsed time, consumes one token if available, otherwise waits and retries.
 
 Implement packages/core/src/llm/provider.ts:
+
 - export interface LLMProvider { name: string; complete(prompt: string, opts: { maxTokens: number; temperature: number }): Promise<string>; }
 - export class GroqProvider implements LLMProvider
   Uses global fetch() against https://api.groq.com/openai/v1/chat/completions,
@@ -838,8 +889,9 @@ Implement packages/core/src/llm/provider.ts:
   waitForToken() before each call, catches errors and moves to the next
   provider, throws a combined error only if all providers fail.
 
-Write packages/core/src/__tests__/llm-provider.test.ts mocking global
+Write packages/core/src/**tests**/llm-provider.test.ts mocking global
 fetch (do NOT make real API calls in tests):
+
 - GroqProvider correctly retries on a mocked 429 response
 - callWithFallback falls through to the second provider when the first throws
 - callWithFallback throws a combined error when all providers fail
@@ -853,19 +905,23 @@ Run auto-lint skill. Append entry to prompts.md
 ## Documentation Summarizer with JSON Repair
 
 ### Goal
+
 Add a JSON-repair utility for tolerating malformed LLM output, and implement the batching file summarizer that turns prioritized files into per-file `FileSummary` records via cached, fallback-safe LLM calls.
 
 ### User Prompt
+
 Read PRD.md Section 4.6 and CLAUDE.md rule 8 (untrusted content delimiters).
 
 Implement packages/core/src/utils/json-repair.ts:
+
 - export function extractJSON(raw: string): unknown
-  Strip markdown code fences (```json ... ``` or ``` ... ```) if present.
+  Strip markdown code fences (`json ... ` or `...`) if present.
   Trim leading/trailing non-JSON text (find the first '{' or '[' and last
   '}' or ']'). Attempt JSON.parse. If it fails, try removing trailing
   commas via regex and retry. If still failing, throw the original error.
 
 Implement packages/core/src/documentation/summarizer.ts:
+
 - export async function summarizeFiles(files: FileNode[], contentCache:
   Map<string,string>, repoMeta: RepoMeta, providers: LLMProvider[],
   rateLimiters: Map<string, TokenBucketRateLimiter>, cache: SummaryCache,
@@ -891,8 +947,9 @@ Implement packages/core/src/documentation/summarizer.ts:
   failing the whole batch. Cache every valid result. Call onProgress after
   each batch. Log final cache hit rate to auditLog.
 
-Write packages/core/src/__tests__/summarizer.test.ts mocking
+Write packages/core/src/**tests**/summarizer.test.ts mocking
 callWithFallback to return canned JSON responses:
+
 - Verify cached files produce zero LLM calls on a second run
 - Verify malformed JSON response triggers per-file fallback summaries,
   not a thrown error
@@ -906,15 +963,18 @@ Run auto-lint skill. Append entry to prompts.md
 ## Deterministic Citation Mapper and Document Synthesizer
 
 ### Goal
+
 Implement mapCitations() (deterministic symbol-index cross-referencing for `[file:line]` citations) and synthesize() (README/ARCHITECTURE/ONBOARDING generation via independent, fallback-safe LLM calls) per PRD.md Section 4.6.
 
 ### User Prompt
+
 Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
 Then,
 Read PRD.md Section 4.6 in full, especially the citation requirement and
 the Mermaid disclaimer requirement.
 
 Implement packages/core/src/documentation/citation-mapper.ts:
+
 - export function mapCitations(generatedText: string, symbolIndex:
   Map<string, Array<{path: string; line: number}>>): string
   Uses a regex to find backtick-wrapped identifiers (`\`(\w+)\``) in the
@@ -923,6 +983,7 @@ Implement packages/core/src/documentation/citation-mapper.ts:
   unmatched identifiers untouched (never fabricate a citation).
 
 Implement packages/core/src/documentation/synthesizer.ts:
+
 - Three prompt-building functions: buildReadmePrompt, buildArchitecturePrompt
   (must instruct the model to include a ```mermaid fenced diagram AND to
   prepend this exact disclaimer as the first line: "> Note: This
@@ -946,8 +1007,9 @@ Implement packages/core/src/documentation/synthesizer.ts:
   fallback outcome per document to auditLog. Return { readme, architecture,
   onboarding }.
 
-Write packages/core/src/__tests__/synthesizer.test.ts and
+Write packages/core/src/**tests**/synthesizer.test.ts and
 citation-mapper.test.ts mocking callWithFallback:
+
 - All 3 documents generate successfully with citations applied
 - One document's LLM call fails → verify template fallback is used for
   that doc only, other two still use LLM output
@@ -962,14 +1024,17 @@ Run auto-lint skill. Append entry to prompts.md
 ## Core pipeline orchestrator
 
 ### Goal
+
 Implement the fixed, sequential `runPipeline` orchestrator that wires ingestion → framework detection → discovery → import/symbol indexing → prioritization → summarization → synthesis into a single non-agentic flow, with sandbox lifecycle and a global timeout, plus a dry-run test against a small local fixture repo.
 
 ### User Prompt
+
 Read ARCHITECTURE.md Section 7 (Ingestion → Documentation Pipeline Flow)
 and CLAUDE.md Architectural Principle 4 (no agent loops in the pipeline —
 strictly sequential).
 
 Implement packages/core/src/pipeline.ts:
+
 - export interface PipelineOptions { maxFiles?: number; skipCache?: boolean;
   onProgress?: (stage: string, detail?: string) => void; }
 - export interface PipelineResult { meta: RepoMeta; summaries: FileSummary[];
@@ -992,9 +1057,10 @@ Implement packages/core/src/pipeline.ts:
   Enforce a global 5-minute timeout using AbortController — if exceeded,
   clean up and throw a clear timeout error.
 
-Write packages/core/src/__tests__/pipeline.test.ts using a small real
+Write packages/core/src/**tests**/pipeline.test.ts using a small real
 fixture repo (5-10 files) on local disk (input.type = 'local') with ALL
 LLM calls mocked (mock callWithFallback at the module level):
+
 - Full pipeline run produces meta, summaries, and all 3 synthesis
   documents
 - auditLog contains entries for each major stage
@@ -1010,231 +1076,234 @@ Run auto-lint skill. Append entry to prompts.md
 ## Fix premature LLM fallback to Gemini
 
 ### Goal
+
 Investigate a manual-testing bug report that Gemini was being invoked even when Groq succeeded, identify the true root cause in `llm/provider.ts` from a list of 5 candidate hypotheses, fix it, add regression tests proving the bug is gone, and manually verify against real Groq/Gemini API calls.
 
 ### User Prompt
+
 Read packages/core/src/llm/provider.ts in full before making any changes.
 
-BUG REPORT: During manual pipeline testing, GeminiProvider is being called 
-even when GroqProvider succeeds. The fallback chain should ONLY move to 
-the next provider (Gemini) when the CURRENT provider (Groq) has 
-DEFINITIVELY failed after exhausting its own retries — not on every call, 
-not speculatively, not in parallel, and not due to a false-positive error 
+BUG REPORT: During manual pipeline testing, GeminiProvider is being called
+even when GroqProvider succeeds. The fallback chain should ONLY move to
+the next provider (Gemini) when the CURRENT provider (Groq) has
+DEFINITIVELY failed after exhausting its own retries — not on every call,
+not speculatively, not in parallel, and not due to a false-positive error
 being misclassified as a failure.
 
 INVESTIGATION STEPS (do these first, before writing any fix):
 
-1. Read the current implementation of callWithFallback() in 
-   packages/core/src/llm/provider.ts line by line and identify exactly 
-   why Gemini is being invoked unnecessarily. Specifically check for 
+1. Read the current implementation of callWithFallback() in
+   packages/core/src/llm/provider.ts line by line and identify exactly
+   why Gemini is being invoked unnecessarily. Specifically check for
    these common root causes and report which one(s) apply:
 
-   a) Is callWithFallback() calling providers in parallel (e.g. via 
-      Promise.all or Promise.race) instead of sequentially trying Groq 
-      first and ONLY calling Gemini if Groq's own try/catch (including 
-      its internal retries) fully exhausts and throws?
+   a) Is callWithFallback() calling providers in parallel (e.g. via
+   Promise.all or Promise.race) instead of sequentially trying Groq
+   first and ONLY calling Gemini if Groq's own try/catch (including
+   its internal retries) fully exhausts and throws?
 
-   b) Is GroqProvider's complete() method incorrectly throwing/rejecting 
-      on a condition that ISN'T a real failure — for example, throwing 
-      on a successful HTTP 200 response due to a response-parsing bug, 
-      or misinterpreting a valid but slow response as a timeout?
+   b) Is GroqProvider's complete() method incorrectly throwing/rejecting
+   on a condition that ISN'T a real failure — for example, throwing
+   on a successful HTTP 200 response due to a response-parsing bug,
+   or misinterpreting a valid but slow response as a timeout?
 
-   c) Is the retry logic inside GroqProvider itself broken — e.g. does it 
-      give up after 0 or 1 attempt instead of the intended 3 retries with 
-      exponential backoff, causing premature fallback?
+   c) Is the retry logic inside GroqProvider itself broken — e.g. does it
+   give up after 0 or 1 attempt instead of the intended 3 retries with
+   exponential backoff, causing premature fallback?
 
-   d) Is there any code path (in summarizer.ts or synthesizer.ts) that 
-      calls callWithFallback() with BOTH providers passed in a way that 
-      causes both to fire regardless of success — e.g. is the providers 
-      array being misused, or is there a leftover Promise.allSettled call 
-      treating every provider as independent rather than as a fallback chain?
+   d) Is there any code path (in summarizer.ts or synthesizer.ts) that
+   calls callWithFallback() with BOTH providers passed in a way that
+   causes both to fire regardless of success — e.g. is the providers
+   array being misused, or is there a leftover Promise.allSettled call
+   treating every provider as independent rather than as a fallback chain?
 
-   e) Is the rate limiter (rate-limiter.ts) incorrectly blocking/timing 
-      out the Groq call in a way that looks like a failure to 
-      callWithFallback, even though Groq itself never actually errored?
+   e) Is the rate limiter (rate-limiter.ts) incorrectly blocking/timing
+   out the Groq call in a way that looks like a failure to
+   callWithFallback, even though Groq itself never actually errored?
 
-   Print your findings clearly before proceeding to the fix — state 
+   Print your findings clearly before proceeding to the fix — state
    exactly which root cause(s) you found in this specific codebase.
 
-2. After identifying the actual root cause, fix callWithFallback() so 
+2. After identifying the actual root cause, fix callWithFallback() so
    that it behaves STRICTLY as follows:
 
-   - Iterate providers in array order (index 0 = Groq, index 1 = Gemini) 
-     using a plain for-loop or for...of — NEVER Promise.all/allSettled/race 
-     for the fallback logic itself (Promise.allSettled remains correct 
-     ONLY in synthesizer.ts for running the 3 independent document 
-     generations in parallel — that is a SEPARATE, unrelated use of 
+   - Iterate providers in array order (index 0 = Groq, index 1 = Gemini)
+     using a plain for-loop or for...of — NEVER Promise.all/allSettled/race
+     for the fallback logic itself (Promise.allSettled remains correct
+     ONLY in synthesizer.ts for running the 3 independent document
+     generations in parallel — that is a SEPARATE, unrelated use of
      allSettled and must NOT be touched by this fix).
 
-   - For the CURRENT provider in the loop: await its own waitForToken() 
-     (rate limiter), then call provider.complete(). If this call succeeds 
-     (resolves), IMMEDIATELY return the result — do NOT proceed to the 
+   - For the CURRENT provider in the loop: await its own waitForToken()
+     (rate limiter), then call provider.complete(). If this call succeeds
+     (resolves), IMMEDIATELY return the result — do NOT proceed to the
      next provider under any circumstances.
 
-   - Only if provider.complete() THROWS (after that provider's own 
-     internal retry logic — e.g. Groq's 429/5xx retry handling — has been 
-     fully exhausted and it still throws) should the loop catch the error, 
-     log a clear warning like "Groq failed after retries, falling back to 
-     Gemini: {error message}", and proceed to try the NEXT provider in 
+   - Only if provider.complete() THROWS (after that provider's own
+     internal retry logic — e.g. Groq's 429/5xx retry handling — has been
+     fully exhausted and it still throws) should the loop catch the error,
+     log a clear warning like "Groq failed after retries, falling back to
+     Gemini: {error message}", and proceed to try the NEXT provider in
      the array.
 
-   - If ALL providers in the array throw, only then throw a final 
+   - If ALL providers in the array throw, only then throw a final
      combined error listing every provider's failure reason.
 
-   - Add an explicit unit-testable log line right before ANY fallback 
-     provider is attempted: console.warn(\`[LLM Fallback] Provider 
-     "${providers[i-1].name}" failed, attempting "${providers[i].name}"\`) 
-     — this makes it visually obvious in logs/tests whenever a fallback 
-     genuinely occurs, versus the normal silent-success path where no 
+   - Add an explicit unit-testable log line right before ANY fallback
+     provider is attempted: console.warn(\`[LLM Fallback] Provider
+     "${providers[i-1].name}" failed, attempting "${providers[i].name}"\`)
+     — this makes it visually obvious in logs/tests whenever a fallback
+     genuinely occurs, versus the normal silent-success path where no
      such log should ever print.
 
-3. If the root cause turns out to be inside GroqProvider's own retry 
-   logic (root cause 'b' or 'c' above), fix that method directly so it: 
-   only throws after genuinely exhausting its 3 retries on 429/5xx 
-   responses, correctly returns/resolves on any 2xx response without 
+3. If the root cause turns out to be inside GroqProvider's own retry
+   logic (root cause 'b' or 'c' above), fix that method directly so it:
+   only throws after genuinely exhausting its 3 retries on 429/5xx
+   responses, correctly returns/resolves on any 2xx response without
    throwing, and does not misclassify normal latency as a failure.
 
-4. UPDATE packages/core/src/__tests__/llm-provider.test.ts to add/fix 
+4. UPDATE packages/core/src/**tests**/llm-provider.test.ts to add/fix
    these specific regression tests proving the bug is gone:
 
-   - Test: when GroqProvider's complete() resolves successfully on the 
-     FIRST attempt, assert that GeminiProvider.complete() is NEVER called 
-     (use a jest/vitest mock spy and assert toHaveBeenCalledTimes(0) on 
+   - Test: when GroqProvider's complete() resolves successfully on the
+     FIRST attempt, assert that GeminiProvider.complete() is NEVER called
+     (use a jest/vitest mock spy and assert toHaveBeenCalledTimes(0) on
      the Gemini mock)
-   - Test: when GroqProvider's complete() resolves successfully only 
-     after its OWN internal retry (e.g. first attempt returns a mocked 
-     429, second attempt succeeds), assert GeminiProvider is STILL never 
-     called — proving Groq's internal retries are exhausted before any 
+   - Test: when GroqProvider's complete() resolves successfully only
+     after its OWN internal retry (e.g. first attempt returns a mocked
+     429, second attempt succeeds), assert GeminiProvider is STILL never
+     called — proving Groq's internal retries are exhausted before any
      fallback decision is made
-   - Test: when GroqProvider's complete() throws even after its own 
-     retries are exhausted, assert GeminiProvider.complete() IS called 
+   - Test: when GroqProvider's complete() throws even after its own
+     retries are exhausted, assert GeminiProvider.complete() IS called
      exactly once, and its result is returned
-   - Test: when BOTH providers throw, assert the final thrown error 
+   - Test: when BOTH providers throw, assert the final thrown error
      message mentions both provider names/failure reasons
 
-5. Manually verify the fix by adding a temporary console.log inside 
-   GeminiProvider.complete() (or checking your existing rate-limiter 
-   token consumption) and confirm during a real pipeline run 
-   (summarizer + synthesizer) that Gemini's token bucket never depletes 
-   when Groq is healthy — report this confirmation back to me. Remove 
+5. Manually verify the fix by adding a temporary console.log inside
+   GeminiProvider.complete() (or checking your existing rate-limiter
+   token consumption) and confirm during a real pipeline run
+   (summarizer + synthesizer) that Gemini's token bucket never depletes
+   when Groq is healthy — report this confirmation back to me. Remove
    any temporary debug logging before finishing.
 
-Run auto-lint skill. Run the full test suite (npm run test --workspaces) and 
-confirm no regressions. Append an entry to prompts.md documenting this 
-fix per the CLAUDE.md format, including which specific root cause (a-e 
+Run auto-lint skill. Run the full test suite (npm run test --workspaces) and
+confirm no regressions. Append an entry to prompts.md documenting this
+fix per the CLAUDE.md format, including which specific root cause (a-e
 from the investigation step) was actually found in this codebase.
 Read packages/core/src/llm/provider.ts in full before making any changes.
 
-BUG REPORT: During manual pipeline testing, GeminiProvider is being called 
-even when GroqProvider succeeds. The fallback chain should ONLY move to 
-the next provider (Gemini) when the CURRENT provider (Groq) has 
-DEFINITIVELY failed after exhausting its own retries — not on every call, 
-not speculatively, not in parallel, and not due to a false-positive error 
+BUG REPORT: During manual pipeline testing, GeminiProvider is being called
+even when GroqProvider succeeds. The fallback chain should ONLY move to
+the next provider (Gemini) when the CURRENT provider (Groq) has
+DEFINITIVELY failed after exhausting its own retries — not on every call,
+not speculatively, not in parallel, and not due to a false-positive error
 being misclassified as a failure.
 
 INVESTIGATION STEPS (do these first, before writing any fix):
 
-1. Read the current implementation of callWithFallback() in 
-   packages/core/src/llm/provider.ts line by line and identify exactly 
-   why Gemini is being invoked unnecessarily. Specifically check for 
+1. Read the current implementation of callWithFallback() in
+   packages/core/src/llm/provider.ts line by line and identify exactly
+   why Gemini is being invoked unnecessarily. Specifically check for
    these common root causes and report which one(s) apply:
 
-   a) Is callWithFallback() calling providers in parallel (e.g. via 
-      Promise.all or Promise.race) instead of sequentially trying Groq 
-      first and ONLY calling Gemini if Groq's own try/catch (including 
-      its internal retries) fully exhausts and throws?
+   a) Is callWithFallback() calling providers in parallel (e.g. via
+   Promise.all or Promise.race) instead of sequentially trying Groq
+   first and ONLY calling Gemini if Groq's own try/catch (including
+   its internal retries) fully exhausts and throws?
 
-   b) Is GroqProvider's complete() method incorrectly throwing/rejecting 
-      on a condition that ISN'T a real failure — for example, throwing 
-      on a successful HTTP 200 response due to a response-parsing bug, 
-      or misinterpreting a valid but slow response as a timeout?
+   b) Is GroqProvider's complete() method incorrectly throwing/rejecting
+   on a condition that ISN'T a real failure — for example, throwing
+   on a successful HTTP 200 response due to a response-parsing bug,
+   or misinterpreting a valid but slow response as a timeout?
 
-   c) Is the retry logic inside GroqProvider itself broken — e.g. does it 
-      give up after 0 or 1 attempt instead of the intended 3 retries with 
-      exponential backoff, causing premature fallback?
+   c) Is the retry logic inside GroqProvider itself broken — e.g. does it
+   give up after 0 or 1 attempt instead of the intended 3 retries with
+   exponential backoff, causing premature fallback?
 
-   d) Is there any code path (in summarizer.ts or synthesizer.ts) that 
-      calls callWithFallback() with BOTH providers passed in a way that 
-      causes both to fire regardless of success — e.g. is the providers 
-      array being misused, or is there a leftover Promise.allSettled call 
-      treating every provider as independent rather than as a fallback chain?
+   d) Is there any code path (in summarizer.ts or synthesizer.ts) that
+   calls callWithFallback() with BOTH providers passed in a way that
+   causes both to fire regardless of success — e.g. is the providers
+   array being misused, or is there a leftover Promise.allSettled call
+   treating every provider as independent rather than as a fallback chain?
 
-   e) Is the rate limiter (rate-limiter.ts) incorrectly blocking/timing 
-      out the Groq call in a way that looks like a failure to 
-      callWithFallback, even though Groq itself never actually errored?
+   e) Is the rate limiter (rate-limiter.ts) incorrectly blocking/timing
+   out the Groq call in a way that looks like a failure to
+   callWithFallback, even though Groq itself never actually errored?
 
-   Print your findings clearly before proceeding to the fix — state 
+   Print your findings clearly before proceeding to the fix — state
    exactly which root cause(s) you found in this specific codebase.
 
-2. After identifying the actual root cause, fix callWithFallback() so 
+2. After identifying the actual root cause, fix callWithFallback() so
    that it behaves STRICTLY as follows:
 
-   - Iterate providers in array order (index 0 = Groq, index 1 = Gemini) 
-     using a plain for-loop or for...of — NEVER Promise.all/allSettled/race 
-     for the fallback logic itself (Promise.allSettled remains correct 
-     ONLY in synthesizer.ts for running the 3 independent document 
-     generations in parallel — that is a SEPARATE, unrelated use of 
+   - Iterate providers in array order (index 0 = Groq, index 1 = Gemini)
+     using a plain for-loop or for...of — NEVER Promise.all/allSettled/race
+     for the fallback logic itself (Promise.allSettled remains correct
+     ONLY in synthesizer.ts for running the 3 independent document
+     generations in parallel — that is a SEPARATE, unrelated use of
      allSettled and must NOT be touched by this fix).
 
-   - For the CURRENT provider in the loop: await its own waitForToken() 
-     (rate limiter), then call provider.complete(). If this call succeeds 
-     (resolves), IMMEDIATELY return the result — do NOT proceed to the 
+   - For the CURRENT provider in the loop: await its own waitForToken()
+     (rate limiter), then call provider.complete(). If this call succeeds
+     (resolves), IMMEDIATELY return the result — do NOT proceed to the
      next provider under any circumstances.
 
-   - Only if provider.complete() THROWS (after that provider's own 
-     internal retry logic — e.g. Groq's 429/5xx retry handling — has been 
-     fully exhausted and it still throws) should the loop catch the error, 
-     log a clear warning like "Groq failed after retries, falling back to 
-     Gemini: {error message}", and proceed to try the NEXT provider in 
+   - Only if provider.complete() THROWS (after that provider's own
+     internal retry logic — e.g. Groq's 429/5xx retry handling — has been
+     fully exhausted and it still throws) should the loop catch the error,
+     log a clear warning like "Groq failed after retries, falling back to
+     Gemini: {error message}", and proceed to try the NEXT provider in
      the array.
 
-   - If ALL providers in the array throw, only then throw a final 
+   - If ALL providers in the array throw, only then throw a final
      combined error listing every provider's failure reason.
 
-   - Add an explicit unit-testable log line right before ANY fallback 
-     provider is attempted: console.warn(\`[LLM Fallback] Provider 
-     "${providers[i-1].name}" failed, attempting "${providers[i].name}"\`) 
-     — this makes it visually obvious in logs/tests whenever a fallback 
-     genuinely occurs, versus the normal silent-success path where no 
+   - Add an explicit unit-testable log line right before ANY fallback
+     provider is attempted: console.warn(\`[LLM Fallback] Provider
+     "${providers[i-1].name}" failed, attempting "${providers[i].name}"\`)
+     — this makes it visually obvious in logs/tests whenever a fallback
+     genuinely occurs, versus the normal silent-success path where no
      such log should ever print.
 
-3. If the root cause turns out to be inside GroqProvider's own retry 
-   logic (root cause 'b' or 'c' above), fix that method directly so it: 
-   only throws after genuinely exhausting its 3 retries on 429/5xx 
-   responses, correctly returns/resolves on any 2xx response without 
+3. If the root cause turns out to be inside GroqProvider's own retry
+   logic (root cause 'b' or 'c' above), fix that method directly so it:
+   only throws after genuinely exhausting its 3 retries on 429/5xx
+   responses, correctly returns/resolves on any 2xx response without
    throwing, and does not misclassify normal latency as a failure.
 
-4. UPDATE packages/core/src/__tests__/llm-provider.test.ts to add/fix 
+4. UPDATE packages/core/src/**tests**/llm-provider.test.ts to add/fix
    these specific regression tests proving the bug is gone:
 
-   - Test: when GroqProvider's complete() resolves successfully on the 
-     FIRST attempt, assert that GeminiProvider.complete() is NEVER called 
-     (use a jest/vitest mock spy and assert toHaveBeenCalledTimes(0) on 
+   - Test: when GroqProvider's complete() resolves successfully on the
+     FIRST attempt, assert that GeminiProvider.complete() is NEVER called
+     (use a jest/vitest mock spy and assert toHaveBeenCalledTimes(0) on
      the Gemini mock)
-   - Test: when GroqProvider's complete() resolves successfully only 
-     after its OWN internal retry (e.g. first attempt returns a mocked 
-     429, second attempt succeeds), assert GeminiProvider is STILL never 
-     called — proving Groq's internal retries are exhausted before any 
+   - Test: when GroqProvider's complete() resolves successfully only
+     after its OWN internal retry (e.g. first attempt returns a mocked
+     429, second attempt succeeds), assert GeminiProvider is STILL never
+     called — proving Groq's internal retries are exhausted before any
      fallback decision is made
-   - Test: when GroqProvider's complete() throws even after its own 
-     retries are exhausted, assert GeminiProvider.complete() IS called 
+   - Test: when GroqProvider's complete() throws even after its own
+     retries are exhausted, assert GeminiProvider.complete() IS called
      exactly once, and its result is returned
-   - Test: when BOTH providers throw, assert the final thrown error 
+   - Test: when BOTH providers throw, assert the final thrown error
      message mentions both provider names/failure reasons
 
-5. Manually verify the fix by adding a temporary console.log inside 
-   GeminiProvider.complete() (or checking your existing rate-limiter 
-   token consumption) and confirm during a real pipeline run 
-   (summarizer + synthesizer) that Gemini's token bucket never depletes 
-   when Groq is healthy — report this confirmation back to me. Remove 
+5. Manually verify the fix by adding a temporary console.log inside
+   GeminiProvider.complete() (or checking your existing rate-limiter
+   token consumption) and confirm during a real pipeline run
+   (summarizer + synthesizer) that Gemini's token bucket never depletes
+   when Groq is healthy — report this confirmation back to me. Remove
    any temporary debug logging before finishing.
 
-Run auto-lint skill. Run the full test suite (npm run test --workspaces) and 
-confirm no regressions. Append an entry to prompts.md documenting this 
-fix per the CLAUDE.md format, including which specific root cause (a-e 
+Run auto-lint skill. Run the full test suite (npm run test --workspaces) and
+confirm no regressions. Append an entry to prompts.md documenting this
+fix per the CLAUDE.md format, including which specific root cause (a-e
 from the investigation step) was actually found in this codebase.
 
 ### Root Cause Found
+
 (c) — `fetchWithRetry()`'s 429 (rate-limit) branch used a one-shot boolean
 flag (`retriedAfterRateLimit`), allowing exactly ONE retry, versus the 5xx
 branch's 3 retries via `SERVER_ERROR_BACKOFFS_MS`. Root causes (a), (b),
@@ -1252,6 +1321,7 @@ never rejects, only delays, so it cannot be misread as a provider failure.
 ## Deep Dive Agent Tools
 
 ### Goal
+
 Implement the 5 Deep Dive ReAct agent tools (`read_file`, `search_code`,
 `list_directory`, `get_file_summary`, `find_references`) in
 `packages/core/src/agent/tools.ts` per PRD.md §4.7 and ARCHITECTURE.md's
@@ -1259,11 +1329,13 @@ Implement the 5 Deep Dive ReAct agent tools (`read_file`, `search_code`,
 sandbox directory before any real agent loop consumes them.
 
 ### User Prompt
+
 Read the SESSION_SUMMARY.md file first.
 Then,
 Read PRD.md Section 4.7 and ARCHITECTURE.md's DeepDiveSession interface.
 
 Implement packages/core/src/agent/tools.ts:
+
 - export interface AgentContext { sandboxPath: string; repoMeta: RepoMeta;
   summariesMap: Map<string, FileSummary>; visitedFiles: Map<string,
   string>; }
@@ -1291,8 +1363,9 @@ Implement packages/core/src/agent/tools.ts:
      matching "path:line" entries.
 - export const TOOLS: AgentTool[] — array of all 5 tools above.
 
-Write packages/core/src/__tests__/agent-tools.test.ts using a fixture
+Write packages/core/src/**tests**/agent-tools.test.ts using a fixture
 sandbox directory:
+
 - read_file returns real content on first call, then returns the
   "[Already examined]" prefixed cached content on a second call for the
   same path WITHOUT re-reading from disk (spy on fs.readFileSync call
@@ -1310,9 +1383,11 @@ Run auto-lint skill. Append entry to prompts.md
 ## Deep Dive ReAct agent — session, prompts, investigator loop
 
 ### Goal
+
 Implement the Deep Dive ReAct agent's session lifecycle (`agent/session.ts`), prompt builders (`agent/prompts.ts`), and the ReAct investigation loop itself (`agent/investigator.ts`) — Planning → Reasoning → Tool Use → Observation → Reflection → Synthesis, bounded by 10 iterations and a 60s timeout — on top of the 5 deterministic tools from the previous task, plus unit tests covering the scripted decision sequence, the 10-iteration cap, malformed-JSON resilience, and the visited-file cache.
 
 ### User Prompt
+
 Read the SESSION_SUMMARY.md file first.
 Then,
 Read PRD.md Section 4.7 in full and ARCHITECTURE.md's flow description
@@ -1320,6 +1395,7 @@ for the Deep Dive agent (Planning → Reasoning → Tool Use → Observation
 → Reflection → Synthesis, max 10 iterations, 60s timeout).
 
 Implement packages/core/src/agent/session.ts:
+
 - export function createSession(repoMeta: RepoMeta, sandboxPath: string,
   summaries: FileSummary[]): DeepDiveSession
   Builds summariesMap from the summaries array keyed by path, initializes
@@ -1332,6 +1408,7 @@ Implement packages/core/src/agent/session.ts:
   sandboxPath).
 
 Implement packages/core/src/agent/prompts.ts:
+
 - export function buildPlanPrompt(question: string, repoMeta: RepoMeta,
   summaryCount: number): string
 - export function buildReasonPrompt(state: {question:string; plan:string;
@@ -1347,6 +1424,7 @@ Implement packages/core/src/agent/prompts.ts:
   every claim.
 
 Implement packages/core/src/agent/investigator.ts:
+
 - export async function investigate(question: string, session:
   DeepDiveSession, providers: LLMProvider[], rateLimiters: Map<string,
   TokenBucketRateLimiter>, onEvent?: (event: {type: string; data: any}) =>
@@ -1366,8 +1444,9 @@ Implement packages/core/src/agent/investigator.ts:
   InvestigationResult including reasoningTrace and filesExamined (derived
   from session.visitedFiles keys touched during this call).
 
-Write packages/core/src/__tests__/investigator.test.ts mocking
+Write packages/core/src/**tests**/investigator.test.ts mocking
 callWithFallback to return scripted decisions:
+
 - A scripted sequence of 3 tool calls followed by 'finish' produces a
   scratchpad of exactly 3 entries and a final answer
 - Forcing the LLM to never return 'finish' verifies the loop stops at
@@ -1384,29 +1463,31 @@ Run auto-lint skill. Append entry to prompts.md
 ## Tighten Groq/Gemini free-tier RPM safety buffer
 
 ### Goal
+
 Add a small safety margin below the actual Groq/Gemini free-tier request-per-minute ceilings so the local rate limiters never pace requests right up against the real limit, without touching any batching/call-count logic.
 
 ### User Prompt
+
 Read packages/core/src/llm/rate-limiter.ts and packages/core/src/llm/provider.ts.
 
 Make these two small changes only:
 
-1. In the file where Groq's rate limit is configured (likely where 
-   TokenBucketRateLimiter is instantiated for Groq — could be in 
-   provider.ts inside createProviderChain or wherever the Groq rate 
+1. In the file where Groq's rate limit is configured (likely where
+   TokenBucketRateLimiter is instantiated for Groq — could be in
+   provider.ts inside createProviderChain or wherever the Groq rate
    limiter is created): change the RPM value from 30 to 28.
 
-2. In the same location where Gemini's rate limit is configured: 
+2. In the same location where Gemini's rate limit is configured:
    change the RPM value from 15 to 13.
 
-These are safety buffers so we never touch the real free-tier API 
-limits exactly. Total call counts and batching logic must NOT change 
+These are safety buffers so we never touch the real free-tier API
+limits exactly. Total call counts and batching logic must NOT change
 — only the pacing/speed between calls gets slightly more conservative.
 
-Do NOT change any other logic in rate-limiter.ts or provider.ts. 
+Do NOT change any other logic in rate-limiter.ts or provider.ts.
 Do NOT touch summarizer.ts, synthesizer.ts, or any other file.
 
-Run lint --fix on the changed files only. 
+Run lint --fix on the changed files only.
 Append an entry to prompts.md per the CLAUDE.md format.
 
 ---
@@ -1414,20 +1495,22 @@ Append an entry to prompts.md per the CLAUDE.md format.
 ## Speed up Deep Dive agent: dedicated key, dual models, fewer/cheaper calls
 
 ### Goal
+
 Cut Deep Dive agent latency and LLM quota usage by giving it its own dedicated Groq key, routing planning/reasoning through a fast 8B model while reserving the 70B model for the final synthesis answer, shrinking reasoning token budgets, lowering the iteration cap from 10 to 6, merging the planning call into iteration 1's first decision, and rewriting every agent prompt for 8B-model reliability.
 
 ### User Prompt
-Read PRD.md Section 4.7 and ARCHITECTURE.md's Deep Dive Agent description, 
-along with the current implementation of packages/core/src/llm/provider.ts, 
+
+Read PRD.md Section 4.7 and ARCHITECTURE.md's Deep Dive Agent description,
+along with the current implementation of packages/core/src/llm/provider.ts,
 packages/core/src/agent/investigator.ts, and packages/core/src/agent/prompts.ts.
 
-GOAL: Speed up the Deep Dive agent by (1) using a fast 8B model for 
-planning/reasoning steps and reserving the smarter 70B model only for the 
-final synthesis answer, (2) reducing max_tokens on reasoning calls since 
-they only need to return a small JSON decision, and (3) lowering the max 
-iteration cap from 10 to 6. Additionally, the agent must use its OWN 
-dedicated Groq API key — separate from the summarization and synthesis 
-keys already used elsewhere in the pipeline — since a new dedicated Groq 
+GOAL: Speed up the Deep Dive agent by (1) using a fast 8B model for
+planning/reasoning steps and reserving the smarter 70B model only for the
+final synthesis answer, (2) reducing max_tokens on reasoning calls since
+they only need to return a small JSON decision, and (3) lowering the max
+iteration cap from 10 to 6. Additionally, the agent must use its OWN
+dedicated Groq API key — separate from the summarization and synthesis
+keys already used elsewhere in the pipeline — since a new dedicated Groq
 account/key has been created specifically for the Deep Dive agent.
 
 ---
@@ -1435,192 +1518,194 @@ account/key has been created specifically for the Deep Dive agent.
 1. UPDATE .env.example:
 
 Add a new variable:
-  GROQ_DEEP_DIVE_AGENT_API_KEY=
+GROQ_DEEP_DIVE_AGENT_API_KEY=
 
-Keep the existing GROQ_API_KEY_SUMMARIZATION and GROQ_API_KEY_SYNTHESIS 
+Keep the existing GROQ_API_KEY_SUMMARIZATION and GROQ_API_KEY_SYNTHESIS
 variables unchanged.
 
 ---
 
 2. UPDATE packages/core/src/llm/provider.ts:
 
-Confirm/update createProviderChain() (or wherever provider chains are 
-built) so it accepts a parameter indicating WHICH env var to read the 
-Groq key from, and WHICH model to use. If this function currently only 
+Confirm/update createProviderChain() (or wherever provider chains are
+built) so it accepts a parameter indicating WHICH env var to read the
+Groq key from, and WHICH model to use. If this function currently only
 supports building one type of chain, refactor it into something like:
 
-  export function createProviderChain(config: {
-    groqApiKeyEnvVar: string;
-    groqModel: string;
-    geminiApiKeyEnvVar?: string;   // default to GEMINI_API_KEY if not provided
-    geminiModel?: string;
-  }): LLMProvider[]
+export function createProviderChain(config: {
+groqApiKeyEnvVar: string;
+groqModel: string;
+geminiApiKeyEnvVar?: string; // default to GEMINI_API_KEY if not provided
+geminiModel?: string;
+}): LLMProvider[]
 
-This function should read process.env[config.groqApiKeyEnvVar] for the 
-Groq key and instantiate GroqProvider with that key + config.groqModel. 
-Same pattern for Gemini (fallback). Filter out any provider whose 
-required env var is missing (log a warning, don't throw), exactly as the 
+This function should read process.env[config.groqApiKeyEnvVar] for the
+Groq key and instantiate GroqProvider with that key + config.groqModel.
+Same pattern for Gemini (fallback). Filter out any provider whose
+required env var is missing (log a warning, don't throw), exactly as the
 existing logic already does.
 
-Do NOT break the existing summarization and synthesis provider chain 
-creation calls elsewhere in the codebase — update THEIR call sites too, 
-passing groqApiKeyEnvVar: 'GROQ_API_KEY_SUMMARIZATION' with the existing 
-8B model, and groqApiKeyEnvVar: 'GROQ_API_KEY_SYNTHESIS' with the 
-existing 70B model, respectively, so their current behavior is fully 
+Do NOT break the existing summarization and synthesis provider chain
+creation calls elsewhere in the codebase — update THEIR call sites too,
+passing groqApiKeyEnvVar: 'GROQ_API_KEY_SUMMARIZATION' with the existing
+8B model, and groqApiKeyEnvVar: 'GROQ_API_KEY_SYNTHESIS' with the
+existing 70B model, respectively, so their current behavior is fully
 preserved.
 
 ---
 
 3. UPDATE packages/core/src/agent/investigator.ts:
 
-The agent needs access to TWO separate provider chains now, both using 
+The agent needs access to TWO separate provider chains now, both using
 GROQ_API_KEY_AGENT but with different models:
 
-  const reasoningProviders = createProviderChain({
-    groqApiKeyEnvVar: 'GROQ_API_KEY_AGENT',
-    groqModel: 'llama-3.1-8b-instant',
-  });
+const reasoningProviders = createProviderChain({
+groqApiKeyEnvVar: 'GROQ_API_KEY_AGENT',
+groqModel: 'llama-3.1-8b-instant',
+});
 
-  const synthesisProviders = createProviderChain({
-    groqApiKeyEnvVar: 'GROQ_API_KEY_AGENT',
-    groqModel: 'llama-3.3-70b-versatile',
-  });
+const synthesisProviders = createProviderChain({
+groqApiKeyEnvVar: 'GROQ_API_KEY_AGENT',
+groqModel: 'llama-3.3-70b-versatile',
+});
 
 Update the investigate() function's signature/internals so that:
-  - The PLANNING call (generatePlan / buildPlanPrompt) uses 
-    reasoningProviders with maxTokens reduced to 250 (down from whatever 
-    it currently is) — this call only needs to produce a short 3-5 step 
-    plan, not a long document.
-  - EVERY iteration's REASONING call (buildReasonPrompt / the ReAct 
-    decision step) uses reasoningProviders with maxTokens reduced to 250. 
-    This call only ever needs to return a small JSON object 
-    ({thought, action, toolName, toolArgs}) — it should never need more 
-    than ~250 tokens.
-  - The FINAL SYNTHESIS call (buildSynthesisPrompt / the answer-generation 
-    step) uses synthesisProviders (the 70B model) with maxTokens left at 
-    its current, larger value (this is the only call where output quality 
-    and length genuinely matter, since it produces the user-facing answer).
+
+- The PLANNING call (generatePlan / buildPlanPrompt) uses
+  reasoningProviders with maxTokens reduced to 250 (down from whatever
+  it currently is) — this call only needs to produce a short 3-5 step
+  plan, not a long document.
+- EVERY iteration's REASONING call (buildReasonPrompt / the ReAct
+  decision step) uses reasoningProviders with maxTokens reduced to 250.
+  This call only ever needs to return a small JSON object
+  ({thought, action, toolName, toolArgs}) — it should never need more
+  than ~250 tokens.
+- The FINAL SYNTHESIS call (buildSynthesisPrompt / the answer-generation
+  step) uses synthesisProviders (the 70B model) with maxTokens left at
+  its current, larger value (this is the only call where output quality
+  and length genuinely matter, since it produces the user-facing answer).
 
 Update the MAX_ITERATIONS constant from 10 to 6.
 
-If investigate()'s function signature currently accepts a single 
-`providers: LLMProvider[]` parameter from its caller, refactor it to 
-either (a) build both provider chains internally at the top of the 
-function using the config above, or (b) accept an object like 
-{ reasoningProviders: LLMProvider[], synthesisProviders: LLMProvider[] } 
-from the caller — pick whichever approach requires touching fewer other 
-files, and update the caller (wherever investigate() is invoked — CLI's 
-ask.ts if it exists yet, or the manual test scripts) accordingly to match 
+If investigate()'s function signature currently accepts a single
+`providers: LLMProvider[]` parameter from its caller, refactor it to
+either (a) build both provider chains internally at the top of the
+function using the config above, or (b) accept an object like
+{ reasoningProviders: LLMProvider[], synthesisProviders: LLMProvider[] }
+from the caller — pick whichever approach requires touching fewer other
+files, and update the caller (wherever investigate() is invoked — CLI's
+ask.ts if it exists yet, or the manual test scripts) accordingly to match
 the new signature.
 ---
 
 3.5. REDUCE TOTAL LLM CALL COUNT (Quota Conservation):
 
-Since this agent now uses its own dedicated but still rate-limited Groq 
-key, minimize the total number of LLM calls per question wherever 
+Since this agent now uses its own dedicated but still rate-limited Groq
+key, minimize the total number of LLM calls per question wherever
 possible without breaking correctness:
 
-  - Merge the PLANNING call and the FIRST REASONING call into a single 
-    LLM call. Instead of calling generatePlan() and then separately 
-    calling the reasoning step for iteration 1, build one combined prompt 
-    that asks the model to return BOTH a short plan AND its first tool 
-    decision in one JSON response (e.g. { "plan": "...", "thought": "...", 
-    "action": "tool_call", "toolName": "...", "toolArgs": {...} }). Use 
-    this combined result to populate state.plan AND execute iteration 1's 
-    tool call, saving one full LLM round-trip per question.
-  - Add an early-exit check before each reasoning call: if the model's 
-    LAST response already had action === 'finish', do not make any 
-    further reasoning calls — proceed straight to synthesis.
-  - Do not make a reasoning call at all if MAX_ITERATIONS is already 
-    reached — go straight to the synthesis fallback using whatever 
-    scratchpad exists so far, exactly as the existing bounded-loop logic 
-    already does, but confirm this path costs exactly one synthesis call 
-    and zero extra reasoning calls.
-  - Confirm the total worst-case LLM call count per question is now: 
-    1 combined plan+first-decision call + up to 5 additional reasoning 
-    calls (iterations 2-6, since iteration 1 is now folded into the 
-    combined call) + 1 final synthesis call = 7 calls max per question 
-    (down from up to 8 under the previous 6-iteration design). Print/log 
-    this new worst-case number in a code comment above MAX_ITERATIONS 
-    for future reference.
+- Merge the PLANNING call and the FIRST REASONING call into a single
+  LLM call. Instead of calling generatePlan() and then separately
+  calling the reasoning step for iteration 1, build one combined prompt
+  that asks the model to return BOTH a short plan AND its first tool
+  decision in one JSON response (e.g. { "plan": "...", "thought": "...",
+  "action": "tool_call", "toolName": "...", "toolArgs": {...} }). Use
+  this combined result to populate state.plan AND execute iteration 1's
+  tool call, saving one full LLM round-trip per question.
+- Add an early-exit check before each reasoning call: if the model's
+  LAST response already had action === 'finish', do not make any
+  further reasoning calls — proceed straight to synthesis.
+- Do not make a reasoning call at all if MAX_ITERATIONS is already
+  reached — go straight to the synthesis fallback using whatever
+  scratchpad exists so far, exactly as the existing bounded-loop logic
+  already does, but confirm this path costs exactly one synthesis call
+  and zero extra reasoning calls.
+- Confirm the total worst-case LLM call count per question is now:
+  1 combined plan+first-decision call + up to 5 additional reasoning
+  calls (iterations 2-6, since iteration 1 is now folded into the
+  combined call) + 1 final synthesis call = 7 calls max per question
+  (down from up to 8 under the previous 6-iteration design). Print/log
+  this new worst-case number in a code comment above MAX_ITERATIONS
+  for future reference.
+
 ---
 
-4. UPDATE packages/core/src/agent/prompts.ts (if reasoning prompt text 
-needs adjustment for the smaller token budget):
+4. UPDATE packages/core/src/agent/prompts.ts (if reasoning prompt text
+   needs adjustment for the smaller token budget):
 
-Review buildReasonPrompt() and confirm its instructions still clearly 
-tell the model to respond with ONLY the compact JSON object and nothing 
-else — no preamble, no explanation outside the JSON — since we now have 
-less token budget to work with and any wasted tokens on chatty preamble 
-increases the risk of truncation before the JSON is complete. Tighten the 
-prompt wording if needed to reinforce "respond with ONLY valid JSON, no 
+Review buildReasonPrompt() and confirm its instructions still clearly
+tell the model to respond with ONLY the compact JSON object and nothing
+else — no preamble, no explanation outside the JSON — since we now have
+less token budget to work with and any wasted tokens on chatty preamble
+increases the risk of truncation before the JSON is complete. Tighten the
+prompt wording if needed to reinforce "respond with ONLY valid JSON, no
 other text" more strongly.
 
 ---
 
 4.5. MAXIMIZE PROMPT CLARITY IN prompts.ts (Instruction Optimization):
 
-Rewrite every prompt template in packages/core/src/agent/prompts.ts 
-(buildPlanPrompt or its merged replacement, buildReasonPrompt, 
-buildSynthesisPrompt) to be as close to 100% unambiguous as possible for 
-the 8B model specifically, since smaller models are more sensitive to 
-vague instructions than 70B. Apply these concrete improvements to every 
+Rewrite every prompt template in packages/core/src/agent/prompts.ts
+(buildPlanPrompt or its merged replacement, buildReasonPrompt,
+buildSynthesisPrompt) to be as close to 100% unambiguous as possible for
+the 8B model specifically, since smaller models are more sensitive to
+vague instructions than 70B. Apply these concrete improvements to every
 prompt:
 
-  - State the EXACT expected output format at both the START and the END 
-    of the prompt (models pay more attention to the first and last lines) 
-    — e.g. begin with "You must respond with ONLY a JSON object matching 
-    this exact shape: {...}" and end with a repeated reminder: "Respond 
-    now with ONLY the JSON object. No explanation, no markdown fences, no 
-    text before or after it."
-  - Replace any open-ended phrasing (e.g. "decide what to do next") with 
-    an explicit numbered decision procedure (e.g. "1. Check if 
-    get_file_summary already answers this. 2. If not, choose exactly one 
-    tool from this list: [...]. 3. If you have enough information across 
-    all previous steps, set action to 'finish'.").
-  - Explicitly enumerate all 5 valid tool names and their exact parameter 
-    shapes directly in the reasoning prompt every single time (do not 
-    assume the model remembers them from earlier in the conversation) — 
-    list each as "toolName: <name> | required args: {shape}".
-  - Add one short positive example and one short negative example of a 
-    valid JSON response directly in the prompt template (few-shot 
-    guidance), clearly labeled "CORRECT EXAMPLE:" and "INCORRECT EXAMPLE 
-    (do not do this):".
-  - In buildSynthesisPrompt, explicitly instruct: "Every factual claim 
-    about the code must reference the specific file path it came from. 
-    If you are not certain about something, say so rather than guessing."
-  - Keep every instruction as short, direct, imperative sentences — 
-    remove any hedging or filler language from the existing prompt text.
+- State the EXACT expected output format at both the START and the END
+  of the prompt (models pay more attention to the first and last lines)
+  — e.g. begin with "You must respond with ONLY a JSON object matching
+  this exact shape: {...}" and end with a repeated reminder: "Respond
+  now with ONLY the JSON object. No explanation, no markdown fences, no
+  text before or after it."
+- Replace any open-ended phrasing (e.g. "decide what to do next") with
+  an explicit numbered decision procedure (e.g. "1. Check if
+  get_file_summary already answers this. 2. If not, choose exactly one
+  tool from this list: [...]. 3. If you have enough information across
+  all previous steps, set action to 'finish'.").
+- Explicitly enumerate all 5 valid tool names and their exact parameter
+  shapes directly in the reasoning prompt every single time (do not
+  assume the model remembers them from earlier in the conversation) —
+  list each as "toolName: <name> | required args: {shape}".
+- Add one short positive example and one short negative example of a
+  valid JSON response directly in the prompt template (few-shot
+  guidance), clearly labeled "CORRECT EXAMPLE:" and "INCORRECT EXAMPLE
+  (do not do this):".
+- In buildSynthesisPrompt, explicitly instruct: "Every factual claim
+  about the code must reference the specific file path it came from.
+  If you are not certain about something, say so rather than guessing."
+- Keep every instruction as short, direct, imperative sentences —
+  remove any hedging or filler language from the existing prompt text.
 
-After rewriting, add a comment above each prompt-building function 
-briefly noting it was optimized for 8B-model reliability and reduced 
+After rewriting, add a comment above each prompt-building function
+briefly noting it was optimized for 8B-model reliability and reduced
 call count.
 
 ---
 
-5. UPDATE any existing tests that reference the old single-provider-chain 
-investigate() signature or the old MAX_ITERATIONS value of 10 
-(packages/core/src/__tests__/investigator.test.ts and any other affected 
-test files) so they pass with the new dual-chain signature and the new 
-cap of 6. Specifically update the "max iteration cap" test to assert it 
-stops at 6, not 10.
+5. UPDATE any existing tests that reference the old single-provider-chain
+   investigate() signature or the old MAX_ITERATIONS value of 10
+   (packages/core/src/**tests**/investigator.test.ts and any other affected
+   test files) so they pass with the new dual-chain signature and the new
+   cap of 6. Specifically update the "max iteration cap" test to assert it
+   stops at 6, not 10.
 
 ---
 
-6. Manually verify: run a live test (using the existing 
-manual-test-agent.ts diagnostic script if it still exists, or a quick 
-ad-hoc check) asking one real question, and confirm via console logging 
-or timing that:
-   - Reasoning/planning calls are hitting the 8B model (check the model 
+6. Manually verify: run a live test (using the existing
+   manual-test-agent.ts diagnostic script if it still exists, or a quick
+   ad-hoc check) asking one real question, and confirm via console logging
+   or timing that:
+   - Reasoning/planning calls are hitting the 8B model (check the model
      name in the request or add a temporary log if not already visible)
    - The final answer call is hitting the 70B model
    - Total iterations used stays at or below 6
    - Overall question-answering time is noticeably faster than before
-Report these confirmations back to me, then remove any temporary debug 
-logging added just for this check.
+     Report these confirmations back to me, then remove any temporary debug
+     logging added just for this check.
 
-Run lint --fix. Run the full test suite (npm run test --workspaces) and 
-confirm no regressions. Append an entry to prompts.md documenting this 
+Run lint --fix. Run the full test suite (npm run test --workspaces) and
+confirm no regressions. Append an entry to prompts.md documenting this
 change per the CLAUDE.md format.
 
 ---
@@ -1628,6 +1713,7 @@ change per the CLAUDE.md format.
 ## Fix Deep Dive agent hallucinating file paths instead of using real ones
 
 ### Goal
+
 A live manual-test-agent.ts run (against a real GitHub repo) surfaced a
 correctness bug: the agent's reasoning/planning prompts never listed any
 real file paths, only a count of summarized files — so the 8B model either
@@ -1640,6 +1726,7 @@ repoMeta's detected entry points, add a regression test, and re-verify no
 existing tests regress.
 
 ### User Prompt
+
 Want me to fix the prompt-grounding bug now (agent never sees real file paths, so it hallucinates fake ones)?
 
 ---
@@ -1647,9 +1734,11 @@ Want me to fix the prompt-grounding bug now (agent never sees real file paths, s
 ## Build packages/cli: analyze and ask commands
 
 ### Goal
+
 Implement the CLI package (§4.8): `sleuth analyze <target>` runs the pipeline via a live ora spinner and writes the three generated docs plus a resumable `~/.sleuth/last-session.json`; `sleuth ask [question]` reconstructs a Deep Dive session from that file and either answers one question or runs an interactive inquirer REPL until an exit word terminates the session and cleans up the sandbox. Wire both into a commander entrypoint, and cover both commands with mocked-I/O/LLM vitest tests per the dry-run-before-wet-run rule.
 
 ### User Prompt
+
 Firslty read SESSION_SUMMARY.md file.
 Then,
 Read PRD.md Section 4.8 in full.
@@ -1658,6 +1747,7 @@ Add dependencies to packages/cli: commander, ora, chalk, inquirer.
 Add packages/cli dependency on the local @sleuth/core package.
 
 Implement packages/cli/src/analyze.ts:
+
 - export async function runAnalyzeCommand(target: string, opts: {
   token?: string; maxFiles?: string; output?: string }): Promise<void>
   Detect if target is a URL (matches github.com) or local path. Build a
@@ -1676,6 +1766,7 @@ Implement packages/cli/src/analyze.ts:
   handles sandbox deletion on failure.
 
 Implement packages/cli/src/ask.ts:
+
 - export async function runAskCommand(question?: string): Promise<void>
   Load ~/.sleuth/last-session.json — if missing or its sandboxPath no
   longer exists on disk, print an error instructing the user to run
@@ -1698,8 +1789,9 @@ Wire up commander: program.command('analyze <target>').option('--token
 (runAskCommand). Add a bin entry "sleuth": "./dist/index.js" with a
 shebang line in packages/cli/package.json.
 
-Write packages/cli/src/__tests__/cli.test.ts mocking runPipeline and
+Write packages/cli/src/**tests**/cli.test.ts mocking runPipeline and
 investigate (do not hit real network/LLM):
+
 - analyze command writes all 3 markdown files to the expected output dir
 - analyze command persists last-session.json correctly
 - ask command without a prior session prints the correct guidance message
@@ -1713,41 +1805,49 @@ Run auto-lint skill. Append entry to prompts.md
 ## Deterministic directory tree + Mermaid validation/repair for generated docs
 
 ### Goal
+
 Polish the 3 generated documents per an explicit content spec (ARCHITECTURE.md: exact directory tree, high-level system diagram, frontend component/data-flow diagrams, backend flow chart, all with reliably-correct Mermaid syntax; ONBOARDING.md: prerequisites + step-by-step onboarding; README.generated.md: more detailed explanations) — root-caused a real broken-diagram incident to LLM-authored Mermaid syntax and fixed it deterministically (a pure directory-tree renderer plus a heuristic Mermaid validator with a one-shot LLM repair pass and a guaranteed-safe stripped fallback) rather than trusting prompt compliance alone. Also investigated Deep Dive agent reliability (part 2) and delivered a ranked proposal without implementing, per the user's explicit "tell me how and then we'll start implementing" instruction.
 
 ### User Prompt
-1- I want to polish my 3 generated documents 
+
+1- I want to polish my 3 generated documents
 A- ARCHITECTURE.md must contain
+
 - Exact Modular Directory Tree
 - High-Level System Diagram
 - Frontend Component relation graphs
 - Frontend data flow-chart
 - Backend flow-chart
 - all graphs, flowcharts, and diagrams must be correct and the mermaid syntax must be correct because it breaks the diagrams and i've faced that issue right now in a recent repo summarization-synthesis process the syntax was rong which results in a broken diagram.
-B- ONBOARDING.md must contain clear details how an ndividual can easily onboard that project and what would be the prerequisites for getting onboard that project.
-C- README.generated.md must contain a little more detailed explanation on everything.  
+  B- ONBOARDING.md must contain clear details how an ndividual can easily onboard that project and what would be the prerequisites for getting onboard that project.
+  C- README.generated.md must contain a little more detailed explanation on everything.
 
 2- I want to refactor my deep dive agent and make its responses reliable because its not generating reliable responses right nowit only touches the surface level knowledge of the project nothing inside deep. so we have to make it more reliable tell me how and then we'll start implementing that fix.
- 
+
 update the `SESSION_SUMMARY.md` file.
-run auto-lint skill and append this entry into `prompts.md`  file.
+run auto-lint skill and append this entry into `prompts.md` file.
 
 ---
 
 ## Fix Deep Dive agent shallow-answer issues (Fixes #1, #2, #4, #5)
 
 ### Goal
+
 Implement 4 of the 5 previously-proposed fixes for the Deep Dive agent's shallow-answer problem — reversing the `get_file_summary`-over-`read_file` guidance, adding surrounding-code context to `search_code`/`find_references`, adding pagination to `read_file`, and raising the reasoning step's token budget — while explicitly leaving `MAX_ITERATIONS` (fix #3) untouched pending review of these fixes' impact.
 
 ### User Prompt
+
 Read the `SESSION_SUMMARY.md` first.
 Then,
+
 # Task: Fix Deep Dive Agent Shallow-Answer Issues (Fixes #1, #2, #4, #5 ONLY)
 
 ## Context
+
 The Deep Dive agent gives shallow answers because of four structural issues in the tooling and reasoning pipeline. Implement fixes #1, #2, #4, #5 below. **Do NOT touch fix #3 (MAX_ITERATIONS)** — that decision is pending review of these fixes' impact first.
 
 ## Explicit Non-Goals (do not do these)
+
 - Do NOT change `MAX_ITERATIONS` from its current value.
 - Do NOT swap the reasoning model from the 8B model to the 70B model.
 - Do NOT change the synthesis model or pipeline.
@@ -1826,12 +1926,15 @@ run auto-lint skill, append this entry into `prompts.md` file and at the end upd
 ## Fix Timeout Failures in Summarization Pipeline and Deep Dive Agent
 
 ### Goal
+
 Stop "taking a long time" from being treated as "failed": parallelize and checkpoint the summarization pipeline instead of killing it on a flat wall-clock timeout, and make the Deep Dive agent check the 3 pre-generated docs before any live source-code tool call, with an adaptive per-step timeout instead of a flat 60s kill.
 
 ### User Prompt
+
 # Task: Fix Timeout Failures in (A) Summarization Pipeline and (B) Deep Dive Agent
 
 ## Guiding Principle for Both Fixes
+
 "Taking a long time" and "actually failed" must never be treated as the same event again. A pipeline/agent should only be marked as failed when a genuine error occurs (auth failure, unrecoverable API error after retries, invalid input). Duration alone must never cause a failure — it should instead trigger smarter/faster behavior and clear progress signals to the user.
 
 ---
@@ -1839,6 +1942,7 @@ Stop "taking a long time" from being treated as "failed": parallelize and checkp
 ## PART A — Summarization Pipeline: Handle Large Repos Without Hitting the Hard Timeout
 
 ### Problem
+
 The summarization pipeline runs as a single, long, synchronous process with a fixed wall-clock timeout. On large repos, total processing time exceeds that fixed window and the whole pipeline is killed and reported as failed — even though nothing actually went wrong, it just needed more time.
 
 ### Required Fixes
@@ -1859,6 +1963,7 @@ The summarization pipeline runs as a single, long, synchronous process with a fi
    The pipeline should only be marked "failed" on genuine unrecoverable errors (e.g. repo inaccessible, auth failure, LLM API error after retry-with-backoff is exhausted for a given file/chunk). A single file failing should not fail the whole run — log it, skip it, continue, and report it as a partial issue in the final summary rather than a hard pipeline failure.
 
 ### Acceptance Checks
+
 - A repo large enough to previously hit the timeout now completes successfully (job may take longer in real time, but does not get killed).
 - Killing/interrupting the job mid-run and restarting resumes from the last checkpoint, not from scratch.
 - Re-running on an unchanged repo is significantly faster than the first run (cache hits confirmed in logs).
@@ -1869,6 +1974,7 @@ The summarization pipeline runs as a single, long, synchronous process with a fi
 ## PART B — Deep Dive Agent: Fix Unnecessary 60000ms (60s) Timeouts on Simple Questions
 
 ### Problem
+
 Even simple questions currently hit the agent's 60s timeout, because the agent goes straight to slow tools (like `file_search`, which does iterative live searching over the repo) instead of first checking the fast, already-generated analysis documents from the summarization pipeline (Part A's output).
 
 ### Required Fixes
@@ -1885,12 +1991,13 @@ Even simple questions currently hit the agent's 60s timeout, because the agent g
    - The hard timeout should still exist to catch truly stuck/looping agents, but a normal multi-step deep dive making real progress should not die simply because it crossed 60s.
 
 3. **Fail only on genuine errors.**
-   As with Part A: a timeout on a *stuck* process (no progress happening) is a legitimate failure. A slow-but-progressing multi-step answer is not a failure and should be allowed to continue (within the adaptive timeout above) or return a partial/best-effort answer with a note, rather than erroring out.
+   As with Part A: a timeout on a _stuck_ process (no progress happening) is a legitimate failure. A slow-but-progressing multi-step answer is not a failure and should be allowed to continue (within the adaptive timeout above) or return a partial/best-effort answer with a note, rather than erroring out.
 
 4. **Show estimated time / live status on screen.**
    Surface what the agent is currently doing and a rough time estimate (e.g. "Checking existing analysis... / Now searching source files (~10s)...") so the user has visible confidence the agent is progressing, not stuck — same pattern as Part A's ETA requirement.
 
 ### Acceptance Checks
+
 - A simple question that's answerable from the 3 pre-generated documents returns quickly (well under old 60s ceiling) without invoking `file_search`.
 - A complex question that genuinely requires `file_search` is only escalated to it after the pre-generated docs are checked first, and is not killed by the timeout as long as it's making progress.
 - A genuinely stuck/looping query still times out and fails cleanly (safety net intact).
@@ -1899,6 +2006,7 @@ Even simple questions currently hit the agent's 60s timeout, because the agent g
 ---
 
 ## Deliverables (for both parts)
+
 1. File-by-file summary of what changed, including before/after of timeout and failure-handling logic.
 2. Confirmation that genuine-error failures (bad auth, unreachable repo, exhausted retries) still fail cleanly and are not silently swallowed.
 3. Sample transcripts/logs showing:
@@ -1912,9 +2020,11 @@ Even simple questions currently hit the agent's 60s timeout, because the agent g
 ## Implement @sleuth/api Analyze & Deep Dive Routes
 
 ### Goal
+
 Build out the previously-scaffolded `@sleuth/api` package into a working Express API (analyze pipeline endpoints + Deep Dive session/SSE endpoints + idle-session reaper) that calls the exact same `@sleuth/core` functions as the CLI, per ARCHITECTURE.md's dependency rule.
 
 ### User Prompt
+
 Read SESSION_SUMMARY.md file first.
 Then,
 Read PRD.md Sections 4.9 and 5, ARCHITECTURE.md's dependency rule
@@ -1924,6 +2034,7 @@ Add dependencies to packages/api: express, cors, archiver, uuid.
 Add packages/api dependency on the local @sleuth/core package.
 
 Implement packages/api/src/routes/analyze.ts as an Express Router:
+
 - POST /analyze — body: { url?, localPath?, pat? }. Validate exactly one
   of url/localPath is present. Enforce max 2 concurrent runs via an
   in-memory counter — respond 429 "Server busy, try again shortly" if
@@ -1940,11 +2051,12 @@ Implement packages/api/src/routes/analyze.ts as an Express Router:
   durationMs }.
 - GET /runs/:runId/download — uses archiver to zip the 3 markdown docs
   in-memory and stream as application/zip with Content-Disposition.
-Cap stored runs at 50 — evict oldest on insert when exceeded (also call
-cleanupSandbox for evicted entries if their sandbox wasn't already
-cleaned).
+  Cap stored runs at 50 — evict oldest on insert when exceeded (also call
+  cleanupSandbox for evicted entries if their sandbox wasn't already
+  cleaned).
 
 Implement packages/api/src/routes/sessions.ts as an Express Router:
+
 - POST /sessions/start — body: { runId }. Looks up the completed run's
   sandboxPath/repoMeta/summaries, calls createSession, stores in an
   in-memory Map<string, DeepDiveSession>. Returns { sessionId }.
@@ -1964,6 +2076,7 @@ Implement packages/api/src/routes/sessions.ts as an Express Router:
   the Map, returns { success: true }.
 
 Implement packages/api/src/session-reaper.ts:
+
 - export function startSessionReaper(sessions: Map<string,
   DeepDiveSession>): NodeJS.Timeout
   setInterval every 5 minutes: for each session where (Date.now() -
@@ -1977,8 +2090,9 @@ a global error-handling middleware that redacts secrets before logging
 and returns { error: message }, start the session reaper, listen on
 process.env.PORT.
 
-Write packages/api/src/__tests__/api.test.ts using supertest, mocking
+Write packages/api/src/**tests**/api.test.ts using supertest, mocking
 runPipeline and investigate:
+
 - Full flow: POST /analyze → poll /status until complete → GET /results
   → POST /sessions/start → POST /ask → GET SSE stream receives an
   'answer' event → POST /end → verify session removed from map
@@ -1993,30 +2107,35 @@ Run auto-lint skill. Append entry to prompts.md
 ## Token-Aware Rate Limiting, Cerebras Fallback Provider, and Doc/Prompt Fixes
 
 ### Goal
+
 Stop the Groq 429s uncovered by the live `sleuth analyze` diagnostic (concurrency-vs-tokens-per-minute mismatch) via an immediate stopgap plus a real token-aware rate limiter, add Cerebras as a new middle-rung fallback provider, and keep PRD.md/ARCHITECTURE.md in sync with the change.
 
 ### User Prompt
+
 Context: This is the `sleuth` repo — a pipeline that clones a repo into a
 sandbox and generates ARCHITECTURE.md, ONBOARDING.md, and README.generated.md
 via a deterministic pipeline (CLI + web, same core).
 
 STEP 0 — Read first, before touching any code:
+
 - Read PRD.md at repo root, if it exists.
 - Read ARCHITECTURE.md at repo root, if it exists.
-Use these to understand existing conventions (naming, module boundaries,
-config patterns) before making changes below. Follow existing patterns
-rather than introducing new ones unless necessary.
+  Use these to understand existing conventions (naming, module boundaries,
+  config patterns) before making changes below. Follow existing patterns
+  rather than introducing new ones unless necessary.
 
 STEP 1 — Immediate stopgap (do this first, separate commit):
+
 - In summarizer.ts, reduce MAX_CONCURRENT_BATCHES from 6 to 3.
 - This alone should stop most Groq 429s until Step 2 lands. Commit this
   on its own so it can be reverted independently.
 
 STEP 2 — Real fix: token-aware rate limiting (packages/core/src/llm/rate-limiter.ts):
+
 - Extend TokenBucketRateLimiter to track BOTH requests-per-minute (existing)
   AND tokens-per-minute (new), per provider+model.
 - Before each request, estimate token cost as:
-  input_tokens ≈ batch_chars / 4  (use MAX_BATCH_CHARS as the batch size source)
+  input_tokens ≈ batch_chars / 4 (use MAX_BATCH_CHARS as the batch size source)
   output_tokens = the model's configured max output tokens (e.g. SUMMARIZER_MAX_TOKENS)
   total_estimate = input_tokens + output_tokens
 - Check total_estimate against BOTH the RPM and TPM budget before firing.
@@ -2025,9 +2144,9 @@ STEP 2 — Real fix: token-aware rate limiting (packages/core/src/llm/rate-limit
 - Remove the hardcoded `GROQ_FREE_TIER_RPM = 28` in pipeline.ts. Replace
   with a per-provider config object, e.g.:
   {
-    groq:     { rpm: <current known value>, tpm: <current known value> },
-    gemini:   { rpm: <current known value>, tpm: <current known value> },
-    cerebras: { rpm: null, tpm: null } // placeholder, see Step 3
+  groq: { rpm: <current known value>, tpm: <current known value> },
+  gemini: { rpm: <current known value>, tpm: <current known value> },
+  cerebras: { rpm: null, tpm: null } // placeholder, see Step 3
   }
   Pull the current known Groq/Gemini numbers from wherever they're already
   referenced in the codebase (rate-limiter.ts, pipeline.ts, or provider
@@ -2037,6 +2156,7 @@ STEP 2 — Real fix: token-aware rate limiting (packages/core/src/llm/rate-limit
   calls must be gated by its own rpm/tpm entry in the config above.
 
 STEP 3 — Add Cerebras as a new fallback provider:
+
 - Implement a Cerebras client following the same pattern as the existing
   groq/gemini client implementations (auth, request/response shape, error
   handling).
@@ -2045,12 +2165,13 @@ STEP 3 — Add Cerebras as a new fallback provider:
   blog posts — public numbers for Cerebras's free tier are inconsistent
   and unverified as of now. Instead:
   (a) set conservative placeholder defaults (assume the tightest published
-      figures, not the most generous),
+  figures, not the most generous),
   (b) add a clear TODO/comment noting these must be confirmed by pulling
-      real rate-limit headers from a live Cerebras API call before being
-      trusted in production, the same way Groq's real limits were confirmed.
+  real rate-limit headers from a live Cerebras API call before being
+  trusted in production, the same way Groq's real limits were confirmed.
 
 STEP 4 — Fallback chain:
+
 - Order: Groq → Cerebras → Gemini → placeholder summary.
 - Keep existing Gemini and placeholder-fallback logic intact — just insert
   Cerebras as the new middle rung.
@@ -2058,15 +2179,18 @@ STEP 4 — Fallback chain:
   fix any failures before considering this done.
 
 STEP 5 — Update docs if needed:
+
 - If these changes make anything in ARCHITECTURE.md (e.g. the Backend Flow
   Chart, Components section, or any rate-limiter/provider description) or
   PRD.md stale or inaccurate, update those files to reflect the new design.
   Only touch what's actually affected — don't rewrite unrelated sections.
 
 STEP 6 — Logging:
+
 - Append this entire prompt, verbatim, to prompts.md as per CLAUDE.md rules
 
 STEP 7 — Session summary:
+
 - At the end, once everything above is done and tests pass, update
   SESSION_SUMMARY.md
 
@@ -2075,15 +2199,18 @@ STEP 7 — Session summary:
 ## Rate Limiter Escape Hatch, Deep Dive Provider Routing, Short-Query Fast Path, and Empty-Response Fix
 
 ### Goal
+
 Fix the token-bucket deadlock (a single oversized request could wait forever), route the Deep Dive agent through Groq then Cerebras as its sole final fallback with no silent placeholder degradation, add a cheap short-query fast path, and find + fix the root cause of the agent's empty-first-response bug.
 
 ### User Prompt
+
 CONTEXT: This prompt supersedes the previous rate-limiter prompt. It
 extends the earlier TPM/RPM escape-hatch fix to handle Groq as a pool of
 TWO separate accounts (different keys, independently limited), and adds
 specific routing + bug fixes for the "deep dive agent" feature.
 
 STEP 0 — Read first:
+
 - Read PRD.md and ARCHITECTURE.md at repo root if they exist, to confirm
   current conventions before changing anything below.
 - Locate the "deep dive agent" implementation in the repo (search for
@@ -2093,6 +2220,7 @@ STEP 0 — Read first:
 
 STEP 1 — Escape-hatch fix (still required, do this regardless of Step 2):
 In TokenBucketRateLimiter.waitForBudget():
+
 - Do NOT enlarge the bucket's max capacity to fit oversized requests —
   that breaks the per-minute rate guarantee for subsequent requests.
 - Add an explicit branch: if estimatedTokens > this.tpm for the account
@@ -2108,12 +2236,12 @@ Groq access is via TWO separate API keys/accounts with independently
 tracked rate limits (not shared). Refactor the rate limiter / Groq client
 to support a pool of accounts per provider instead of a single bucket:
 
-  groq: {
-    accounts: [
-      { key: env.GROQ_API_KEY_1, rpm: <pull live>, tpm: <pull live> },
-      { key: env.GROQ_API_KEY_2, rpm: <pull live>, tpm: <pull live> }
-    ]
-  }
+groq: {
+accounts: [
+{ key: env.GROQ_API_KEY_1, rpm: <pull live>, tpm: <pull live> },
+{ key: env.GROQ_API_KEY_2, rpm: <pull live>, tpm: <pull live> }
+]
+}
 
 - Do NOT assume both accounts have identical limits — pull live rate-limit
   headers from BOTH keys separately (same method used for Groq/Cerebras
@@ -2133,6 +2261,7 @@ to support a pool of accounts per provider instead of a single bucket:
   future providers with multiple keys can reuse it.
 
 STEP 3 — Deep dive agent: provider routing
+
 - When the deep dive agent needs a completion, try Groq's
   `llama-3.3-70b-versatile` FIRST, via the pooled multi-account Groq
   client from Step 2.
@@ -2145,6 +2274,7 @@ STEP 3 — Deep dive agent: provider routing
   an interactive, user-facing path (unlike the doc-synthesis pipeline).
 
 STEP 4 — Deep dive agent: fast path for short queries
+
 - Investigate the current flow: confirm whether every query, regardless
   of length/complexity, goes through the full deep-dive pipeline (e.g.
   multi-step retrieval, full context assembly).
@@ -2157,6 +2287,7 @@ STEP 4 — Deep dive agent: fast path for short queries
   rather than risk an incomplete answer.
 
 STEP 5 — Fix empty first-response bug
+
 - Reproduce: the deep dive agent's FIRST response in a session currently
   comes back empty.
 - Investigate root cause — do not assume, verify against the actual code.
@@ -2169,14 +2300,17 @@ STEP 5 — Fix empty first-response bug
   response in a fresh session is non-empty.
 
 STEP 6 — Docs:
+
 - If Steps 1–5 make anything in ARCHITECTURE.md or PRD.md stale
   (provider routing description, rate-limiter design, deep dive agent
   flow), update only the affected sections.
 
 STEP 7 — Logging:
+
 - Append this entire prompt, verbatim, to prompts.md as per CLAUDE.md rules
 
 STEP 8 — Session summary:
+
 - Once everything above is done and tests pass, update SESSION_SUMMARY.md
   summarizing: what changed, which files were touched, what assumptions
   were made (esp. the short-query threshold and any placeholder Groq
@@ -2188,9 +2322,11 @@ STEP 8 — Session summary:
 ## Heartbeat Bus, Rate Limiter Debt/Escalation, and Pipeline Watchdog Rewiring
 
 ### Goal
+
 Replace the rate limiter's floor-to-zero escape hatch with a debt-tracked one that throws a typed `RateLimitEscalationError` past a hard wait timeout instead of polling forever, introduce a process-wide heartbeat bus so a legitimate rate-limited wait can signal liveness to the pipeline's stall watchdog without an `onProgress` stage transition, and add regression tests for the debt path, the escalation timeout, and the watchdog's pulse-vs-stall behavior.
 
 ### User Prompt
+
 You are refactoring the Sleuth monorepo (@sleuth/core) to fix a critical
 "Error: Pipeline Stalled" deadlock. Root cause: TokenBucketRateLimiter.waitForBudget()
 polls for a token amount that can exceed total bucket capacity, causing an
@@ -2238,6 +2374,7 @@ returns, exhaustive error typing):
    packages/core/src/llm/provider.ts's estimator.
 
 Constraints:
+
 - Strictly local-first: no telemetry, no external state, no new runtime
   dependencies beyond what's already in the workspace.
 - Production-ready: full JSDoc on public methods, no console.log (use the
@@ -2247,7 +2384,7 @@ Constraints:
 - Preserve all existing public function signatures used elsewhere in the
   codebase unless a signature change is strictly necessary — if it is,
   update every call site and explain why in a code comment.
-- Add unit tests (packages/core/src/llm/__tests__/rate-limiter.test.ts)
+- Add unit tests (packages/core/src/llm/**tests**/rate-limiter.test.ts)
   covering: (a) oversized single request never hangs and resolves via debt
   path, (b) hardWaitTimeoutMs correctly throws RateLimitEscalationError,
   (c) watchdog does NOT fire during a legitimate 30s rate-limited wait but
@@ -2263,9 +2400,11 @@ agent remains scoped to Deep Dive only.
 ## Live analyze + Deep Dive validation against research-writer-agent
 
 ### Goal
+
 Run `sleuth analyze` against a real external repository with a real GitHub PAT, diagnose and fix whatever real errors surfaced during that live run, and validate the Deep Dive agent against the analyzed repo with real test queries.
 
 ### User Prompt
+
 i want you to do `sleuth analyze https://github.com/IbrahimHamid2002/research-writer-agent --token [REDACTED — real PAT value stripped before logging, per CLAUDE.md §4 rule 4: never write a PAT to disk]` and fix the errors in the mostoptimized way possible coming in the process. also do some test queries with the deep dive agent to check whether its running correctly or not.
 
 ---
@@ -2273,9 +2412,11 @@ i want you to do `sleuth analyze https://github.com/IbrahimHamid2002/research-wr
 ## Verify @sleuth/api routes, session lifecycle, and provider-sharing refactor against spec
 
 ### Goal
+
 Verify that the already-implemented `@sleuth/api` package (analyze routes, Deep Dive session routes + SSE streaming, session reaper, Express entry point) matches PRD §4.9/§5 and ARCHITECTURE.md §2's core-isolation rule, resolve any outstanding lint issues, and confirm the test suite passes end-to-end.
 
 ### User Prompt
+
 Read CLAUDE.md Sections 1, 2, 4, and 5 in full. Read PRD.md Sections 4.9
 and 5. Read ARCHITECTURE.md Section 2 (the @sleuth/api depends on
 @sleuth/core only dependency rule). Do NOT deviate from these.
@@ -2290,6 +2431,7 @@ uuid (and their @types/* where applicable). Add a workspace dependency
 on the local @sleuth/core package.
 
 Implement packages/api/src/routes/analyze.ts as an Express Router:
+
 - POST /analyze — body: { url?, localPath?, pat? }. Validate exactly one
   of url/localPath is present (Zod schema). Enforce max 2 concurrent
   runs via an in-memory counter — respond 429 "Server busy, try again
@@ -2307,11 +2449,12 @@ Implement packages/api/src/routes/analyze.ts as an Express Router:
   durationMs }.
 - GET /runs/:runId/download — uses archiver to zip the 3 markdown docs
   in-memory and stream as application/zip with Content-Disposition.
-Cap stored runs at 50 — evict oldest on insert when exceeded (also call
-cleanupSandbox for evicted entries if their sandbox wasn't already
-cleaned).
+  Cap stored runs at 50 — evict oldest on insert when exceeded (also call
+  cleanupSandbox for evicted entries if their sandbox wasn't already
+  cleaned).
 
 Implement packages/api/src/routes/sessions.ts as an Express Router:
+
 - POST /sessions/start — body: { runId }. Looks up the completed run's
   sandboxPath/repoMeta/summaries, calls createSession, stores in an
   in-memory Map<string, DeepDiveSession>. Returns { sessionId }.
@@ -2331,6 +2474,7 @@ Implement packages/api/src/routes/sessions.ts as an Express Router:
   the Map, returns { success: true }.
 
 Implement packages/api/src/session-reaper.ts:
+
 - export function startSessionReaper(sessions: Map<string,
   DeepDiveSession>): NodeJS.Timeout
   setInterval every 5 minutes: for each session where (Date.now() -
@@ -2345,8 +2489,9 @@ Express app, cors middleware restricted to [process.env.WEB_ORIGIN,
 { error: message }, start the session reaper, listen on
 process.env.PORT.
 
-Write packages/api/src/__tests__/api.test.ts using supertest, mocking
+Write packages/api/src/**tests**/api.test.ts using supertest, mocking
 runPipeline and investigate:
+
 - Full flow: POST /analyze → poll /status until complete → GET
   /results → POST /sessions/start → POST /ask → GET SSE stream
   receives an 'answer' event → POST /end → verify session removed
@@ -2361,5 +2506,167 @@ deviations from the original spec and why.
 
 If any step seems to require touching more than 3 files outside this
 task's target list, STOP and flag it before proceeding.
+
+---
+
+## Web design-system foundation (theme, fonts, base UI, navbar)
+
+### Goal
+
+Establish the visual/design foundation for `@sleuth/web` — theme (dark/light), fonts, shadcn/ui base component library, and a global navbar — as reusable presentational building blocks for later pages, with no business logic, RTK Query, or page content in this sub-task.
+
+### User Prompt
+
+Read SESSION_SUMMARY.md first.
+Then,
+Read CLAUDE.md Sections 1, 2, 3, 4, and 5 in full. Read PRD.md Section
+4.9. Read ARCHITECTURE.md Section 3 (directory tree, @sleuth/web
+package). Do NOT deviate from these.
+
+Note: this task's file count exceeds CLAUDE.md's normal 3-file
+guideline because it is a foundational design-system setup task —
+this is a pre-approved, intentional scope for this specific sub-task
+only. Proceed without re-flagging file count here.
+
+GOAL OF THIS SUB-TASK: establish the visual/design foundation
+(theme, fonts, base UI component library, navbar) that all subsequent
+Sleuth web pages will be built on top of. Do NOT implement any
+business logic, RTK Query, or page content in this sub-task — that is
+handled in Task 19B. This sub-task only produces reusable, presentational
+building blocks.
+
+Scaffold packages/web with Vite + React 18 + TypeScript (strict) +
+Tailwind CSS if not already scaffolded.
+
+Initialize shadcn/ui in packages/web (npx shadcn@latest init), using
+its default TypeScript + Tailwind config. Generate the following
+shadcn/ui base components via the shadcn CLI: button, dialog, input,
+card, toast (and the accompanying useToast hook + <Toaster />
+component). These become packages/web/src/components/ui/*. Do NOT
+hand-roll custom Button/Dialog/Input/Toast implementations — always
+use the shadcn-generated versions and their variants.
+
+Add dependencies: motion (Framer Motion's current package, imported
+as `motion/react`), and whatever the "Magic UI" and "AnimateIcons"
+packages are published as on npm (check their official docs for the
+exact install command/package name before adding — do not guess a
+package name that doesn't exist; if either is copy-paste-based rather
+than an npm install, follow their official CLI/copy instructions
+instead of inventing a dependency).
+
+FONT SETUP:
+Add the Orbitron variable font via Google Fonts in packages/web/index.html:
+<link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400..900&display=swap" rel="stylesheet">
+(plus the required preconnect tags for fonts.googleapis.com and
+fonts.gstatic.com for performance). Register 'Orbitron' as the
+default sans font in packages/web/tailwind.config.ts under
+theme.extend.fontFamily, and apply it globally via a base layer rule
+in packages/web/src/index.css (body { font-family: ... }).
+
+THEME SETUP (CRITICAL — read fully before implementing):
+Implement dark/light mode using shadcn/ui's official "Dark Mode for
+Vite" pattern (a React Context-based ThemeProvider using localStorage
+for persistence, NOT a hand-rolled useState+matchMedia implementation
+and NOT any third-party theme library). Reference implementation:
+
+- packages/web/src/components/theme-provider.tsx exports ThemeProvider
+  and useTheme(), storing the selected theme ('light' | 'dark' |
+  'system') in localStorage under a namespaced key (e.g.
+  'sleuth-ui-theme') so theme choice persists across full page
+  reloads AND across client-side route navigation (since it's a
+  single React context living above the router, this is automatic —
+  do not scope the provider inside any individual page/route).
+- Wrap the entire app in <ThemeProvider> in packages/web/src/main.tsx,
+  above the <RouterProvider>/<BrowserRouter>.
+- The provider toggles a 'dark' class on the <html> element, matching
+  shadcn's convention, so Tailwind's dark: variant works app-wide.
+
+Define the following CSS custom properties in packages/web/src/index.css
+inside the shadcn :root and .dark selectors, overriding shadcn's
+default palette with Sleuth's brand colors:
+
+- Light mode: --background: #FFF0C9 (as HSL), --foreground: #243B8F (as HSL)
+- Dark mode: --background: #243B8F (as HSL), --foreground: #FFF0C9 (as HSL)
+  Convert each HEX to its HSL triplet as shadcn's CSS variables expect
+  space-separated HSL values (matching shadcn's existing --background/
+  --foreground variable format exactly), and verify contrast is
+  sufficient for WCAG AA (both pairs are high-contrast light/dark
+  inversions of each other, so this should already pass).
+
+LOGO + FAVICON THEME SWITCHING:
+Assume the following static assets already exist in packages/web/public/:
+logo-blue.png, logo-cream.png, favicon-blue.ico, favicon-cream.ico.
+If they do not exist, create the directory structure and a clear
+TODO comment/console.warn noting they must be supplied, and use a
+plain text "Sleuth" wordmark as a temporary fallback rather than
+breaking the build.
+
+- In the navbar, render logo-blue.png when theme is 'light' and
+  logo-cream.png when theme is 'dark', reading from useTheme().
+- Dynamically swap the <link rel="icon"> href in index.html between
+  favicon-blue.ico (light) and favicon-cream.ico (dark) via a small
+  effect that runs on theme change (query the link element by id,
+  update its href — do not reload the page to do this).
+
+ICONS (AnimateIcons):
+Import sun-medium, moon-star, and github icons from the AnimateIcons
+package (confirm exact import path from its docs). Use sun-medium/
+moon-star inside the theme toggle button (swap icon based on current
+resolved theme, animated transition between the two — use Framer
+Motion's AnimatePresence for the icon swap, do not rely solely on
+AnimateIcons' own animation if it conflicts with Framer Motion usage
+elsewhere) and the github icon as a plain external link icon.
+
+Implement packages/web/src/components/mode-toggle.tsx:
+
+- A shadcn Button (variant="ghost" or "outline", size="icon") that
+  calls useTheme()'s setTheme, toggling between 'light' and 'dark'
+  (a simple two-state toggle is sufficient here — do not expose a
+  'system' option in the UI unless trivial to add cleanly with a
+  shadcn DropdownMenu; a direct toggle button is the priority).
+  Must have an accessible aria-label (e.g. "Toggle theme") since it
+  has no visible text label, only an icon.
+
+Implement packages/web/src/components/navbar.tsx:
+
+- A fixed/sticky top navbar. Rightmost element: an anchor tag linking
+  to the Sleuth GitHub repository URL (use a placeholder env var
+  VITE_GITHUB_REPO_URL if the actual URL isn't known yet), rendering
+  the AnimateIcons github icon, target="_blank" rel="noopener
+  noreferrer", with an accessible aria-label ("View source on
+  GitHub"). Immediately to its left: the <ModeToggle /> component.
+  Logo (theme-aware, per above) positioned at the navbar's start
+  (left side), acting as a link back to '/'.
+- Must be fully keyboard-navigable (all interactive elements reachable
+  via Tab, visible focus rings — do not remove focus outlines via
+  CSS; if customizing focus styles, use Tailwind's focus-visible:
+  ring utilities rather than outline-none with nothing replacing it).
+
+Wire <Toaster /> (from the shadcn toast setup) once, globally, in
+packages/web/src/main.tsx or a root layout component, so any page can
+call the useToast() hook later (used by Task 20's Deep Dive panel and
+potentially error toasts in 19B).
+
+Naming convention: every variable, prop, and function name in every
+file you create must be self-explanatory on its own (no `data`, `val`,
+`temp`, `x`, `e` for anything other than a genuinely trivial DOM event
+handler parameter, `item`, `thing`) — prefer names like
+`resolvedTheme`, `isGithubLinkExternal`, `navbarLogoSrc`, etc.
+
+After any file is created or modified, run the auto-lint skill (per
+CLAUDE.md Critical Constraint rule 6) scoped to packages/web, and
+resolve any remaining errors manually. Do not leave lint errors
+unresolved before reporting back.
+
+Manually verify: toggle theme, reload the page, confirm theme
+persisted; confirm logo and favicon swap correctly; confirm the
+toggle button and github link are reachable via keyboard Tab and have
+visible focus states.
+
+Append an entry to prompts.md using the exact format defined in
+CLAUDE.md rule 5. Report back: files changed, exact npm packages
+installed for Magic UI/AnimateIcons (and their confirmed real package
+names), any assets that were missing and how you handled the fallback,
+manual verification notes, any deviations from spec and why.
 
 ---
