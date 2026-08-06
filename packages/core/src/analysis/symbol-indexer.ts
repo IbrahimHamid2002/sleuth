@@ -1,9 +1,5 @@
+import { SYMBOL_INDEXER_CLASS_REGEX, SYMBOL_INDEXER_CONST_REGEX, SYMBOL_INDEXER_EXPORT_BLOCK_REGEX, SYMBOL_INDEXER_FUNCTION_REGEX } from '../constants';
 import type { FileNode, Symbol as SymbolInfo } from '../types';
-
-const FUNCTION_REGEX = /export (async )?function (\w+)/g;
-const CLASS_REGEX = /export class (\w+)/g;
-const CONST_REGEX = /export (default )?const (\w+)/g;
-const EXPORT_BLOCK_REGEX = /export \{([^}]+)\}/g;
 
 export function indexSymbols(filePath: string, content: string): SymbolInfo[] {
   const symbols: SymbolInfo[] = [];
@@ -12,29 +8,29 @@ export function indexSymbols(filePath: string, content: string): SymbolInfo[] {
   lines.forEach((line, index) => {
     const lineNumber = index + 1;
 
-    FUNCTION_REGEX.lastIndex = 0;
-    const functionName = FUNCTION_REGEX.exec(line)?.[2];
+    SYMBOL_INDEXER_FUNCTION_REGEX.lastIndex = 0;
+    const functionName = SYMBOL_INDEXER_FUNCTION_REGEX.exec(line)?.[2];
 
     if (functionName !== undefined) {
       symbols.push({ name: functionName, type: 'function', line: lineNumber });
     }
 
-    CLASS_REGEX.lastIndex = 0;
-    const className = CLASS_REGEX.exec(line)?.[1];
+    SYMBOL_INDEXER_CLASS_REGEX.lastIndex = 0;
+    const className = SYMBOL_INDEXER_CLASS_REGEX.exec(line)?.[1];
 
     if (className !== undefined) {
       symbols.push({ name: className, type: 'class', line: lineNumber });
     }
 
-    CONST_REGEX.lastIndex = 0;
-    const constName = CONST_REGEX.exec(line)?.[2];
+    SYMBOL_INDEXER_CONST_REGEX.lastIndex = 0;
+    const constName = SYMBOL_INDEXER_CONST_REGEX.exec(line)?.[2];
 
     if (constName !== undefined) {
       symbols.push({ name: constName, type: 'const', line: lineNumber });
     }
 
-    EXPORT_BLOCK_REGEX.lastIndex = 0;
-    const exportGroup = EXPORT_BLOCK_REGEX.exec(line)?.[1];
+    SYMBOL_INDEXER_EXPORT_BLOCK_REGEX.lastIndex = 0;
+    const exportGroup = SYMBOL_INDEXER_EXPORT_BLOCK_REGEX.exec(line)?.[1];
 
     if (exportGroup !== undefined) {
       for (const rawName of exportGroup.split(',')) {

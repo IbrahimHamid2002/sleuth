@@ -1,22 +1,14 @@
 import { posix } from 'node:path';
 
-import type { FileNode } from '../types';
+import { IMPORT_GRAPH_RESOLUTION_EXTENSIONS, IMPORT_GRAPH_SPECIFIER_REGEXES } from '../constants';
+import type { FileNode, ImportGraph } from '../types';
 
-export interface ImportGraph {
-  inDegree: Map<string, number>;
-}
-
-const IMPORT_FROM_REGEX = /import\s+.*?\s+from\s+['"](.+?)['"]/g;
-const REQUIRE_REGEX = /require\(\s*['"](.+?)['"]\s*\)/g;
-const DYNAMIC_IMPORT_REGEX = /import\(\s*['"](.+?)['"]\s*\)/g;
-const SPECIFIER_REGEXES = [IMPORT_FROM_REGEX, REQUIRE_REGEX, DYNAMIC_IMPORT_REGEX];
-
-const RESOLUTION_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx'];
+export type { ImportGraph } from '../types';
 
 function extractSpecifiers(content: string): string[] {
   const specifiers: string[] = [];
 
-  for (const regex of SPECIFIER_REGEXES) {
+  for (const regex of IMPORT_GRAPH_SPECIFIER_REGEXES) {
     regex.lastIndex = 0;
 
     let match: RegExpExecArray | null = regex.exec(content);
@@ -44,8 +36,8 @@ function resolveRelativeImport(
 
   const candidates = [
     base,
-    ...RESOLUTION_EXTENSIONS.map((ext) => `${base}${ext}`),
-    ...RESOLUTION_EXTENSIONS.map((ext) => posix.join(base, `index${ext}`)),
+    ...IMPORT_GRAPH_RESOLUTION_EXTENSIONS.map((ext) => `${base}${ext}`),
+    ...IMPORT_GRAPH_RESOLUTION_EXTENSIONS.map((ext) => posix.join(base, `index${ext}`)),
   ];
 
   return candidates.find((candidate) => knownFiles.has(candidate));
