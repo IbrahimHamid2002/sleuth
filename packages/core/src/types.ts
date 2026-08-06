@@ -105,6 +105,13 @@ export interface InvestigationResult {
   // True when the deterministic fast-path step answered directly from the 3
   // pre-generated docs, with zero live tool calls — see agent/investigator.ts.
   answeredFromDocs: boolean;
+  // True when the short/simple-query fast path answered directly from file
+  // summaries (path + one-line purpose only, NOT the 3 full docs), with zero
+  // live tool calls — a distinct, cheaper data source than answeredFromDocs
+  // above, only ever attempted for queries classified "simple" and only
+  // after the doc-based fast path already missed. See
+  // agent/investigator.ts's isSimpleQuery/trySimpleQueryFastPath.
+  answeredFromSummaries: boolean;
   reasoningTrace: Array<{
     thought: string;
     toolName: string;

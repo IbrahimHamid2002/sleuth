@@ -1,82 +1,48 @@
-import type { LLMProvider } from '../llm/provider';
+import {
+  AGENT_SYNTHESIS_MAX_TOKENS,
+  AGENT_SYNTHESIS_TEMPERATURE,
+  INVESTIGATOR_FAST_PATH_MAX_TOKENS,
+  INVESTIGATOR_FAST_PATH_TEMPERATURE,
+  INVESTIGATOR_REASON_MAX_TOKENS,
+  INVESTIGATOR_REASON_TEMPERATURE,
+  INVESTIGATOR_SESSION_SAFETY_CAP_MS,
+  INVESTIGATOR_SIMPLE_QUERY_MAX_WORDS,
+  INVESTIGATOR_SOFT_TIMEOUT_MS,
+  INVESTIGATOR_STEP_TIMEOUT_MS,
+  INVESTIGATOR_WATCHDOG_TICK_MS,
+  MAX_ITERATIONS,
+} from '../constants';
 import { callWithFallback } from '../llm/provider';
 import type { TokenBucketRateLimiter } from '../llm/rate-limiter';
 import { AgentDecisionSchema, CombinedPlanAndDecisionSchema, FastPathAnswerSchema } from '../schemas';
-import type { DeepDiveSession, InvestigationResult } from '../types';
+import type {
+  AgentContext,
+  AgentEvent,
+  AgentProviders,
+  AgentScratchpadEntry,
+  DeepDiveSession,
+  InvestigationResult,
+  LLMProvider,
+} from '../types';
 import { extractJSON } from '../utils/json-repair';
 
-import { buildCombinedPlanAndDecisionPrompt, buildFastPathPrompt, buildReasonPrompt, buildSynthesisPrompt, MAX_ITERATIONS } from './prompts';
+import { buildCombinedPlanAndDecisionPrompt, buildFastPathPrompt, buildReasonPrompt, buildSimpleQueryFastPathPrompt, buildSynthesisPrompt } from './prompts';
 import { touchSession } from './session';
-import type { AgentContext } from './tools';
 import { TOOLS } from './tools';
 
-// Event payload shapes differ per event type (a thought string, tool args, an
-// observation string, the final answer) with no meaningful common shape —
-// same pattern as AgentTool.execute's `any` in ./tools.
-// eslint-disable-next-line @typescript-eslint/no-explicit-any -- justified: see comment above
-export type AgentEvent = { type: string; data: any };
+export type { AgentEvent, AgentProviders } from '../types';
 
-// The agent uses its own dedicated Groq key (GROQ_DEEP_DIVE_AGENT_API_KEY) via
-// two separate provider chains built by the caller: a fast 8B model for
-// planning/reasoning (cheap, high-volume, latency-sensitive) and the smarter
-// 70B model reserved for the single final synthesis call, where answer
-// quality actually matters.
-export interface AgentProviders {
-  reasoningProviders: LLMProvider[];
-  synthesisProviders: LLMProvider[];
-}
-
-// "Taking a long time" and "actually failed" are deliberately different
-// events (same principle as pipeline.ts's stall watchdog): a flat wall-clock
-// timeout used to kill a multi-step investigation that was making real
-// progress just because the total crossed 60s. This is now 3 separate knobs:
-//  - SOFT_TIMEOUT_MS: no progress for this long -> emit a "still working"
-//    progress event, but keep going. Never aborts anything.
-//  - STEP_TIMEOUT_MS (the exported `timeoutMs` default): the per-step
-//    watchdog, RESET every time a step completes (a reasoning call resolves,
-//    a tool finishes executing). Only a SINGLE step stuck for this long is
-//    treated as genuinely stuck and aborted — a session making steady
-//    progress across many steps never trips this even past 60s total.
-//  - SESSION_SAFETY_CAP_MS: an absolute backstop regardless of how much
-//    progress happened, in case something pathological keeps resetting the
-//    per-step watchdog without the investigation ever actually finishing.
-const SOFT_TIMEOUT_MS = 15_000;
-const STEP_TIMEOUT_MS = 60_000;
-const SESSION_SAFETY_CAP_MS = 180_000;
-const WATCHDOG_TICK_MS = 2_000;
-
-// Raised from 250: at 250 tokens the "thought" field routinely got cut off
-// mid-sentence before the model could reason through more than a shallow
-// observation, which fed directly into shallow final answers (the "thought"
-// budget structurally discouraged a deliberate, multi-step investigation).
-// Still the 8B model — this is a token-budget change only.
-const REASON_MAX_TOKENS = 1000;
-const REASON_TEMPERATURE = 0.2;
-const SYNTHESIS_MAX_TOKENS = 2000;
-const SYNTHESIS_TEMPERATURE = 0.3;
-// The fast-path doc-only check may need to write a full answer, not just a
-// small JSON decision, so it gets more headroom than a bare reasoning step.
-const FAST_PATH_MAX_TOKENS = 800;
-const FAST_PATH_TEMPERATURE = 0.2;
-
-interface ScratchpadEntry {
-  thought: string;
-  toolName: string;
-  toolArgs: Record<string, unknown>;
-  observation: string;
+function isSimpleQuery(question: string): boolean {
+  return question.trim().split(/\s+/).filter((word) => word.length > 0).length <= INVESTIGATOR_SIMPLE_QUERY_MAX_WORDS;
 }
 
 function emit(onEvent: ((event: AgentEvent) => void) | undefined, type: string, data: unknown): void {
   onEvent?.({ type, data });
 }
 
-// Part B fix #1 (tiered answer lookup, cheap first): tries to answer purely
-// from the 3 pre-generated docs, with zero live tool calls. Called
-// unconditionally before the ReAct loop starts (see runInvestigation) — this
-// is what makes "check the docs first" structural rather than a tool the
-// model might skip. Any failure here (timeout, malformed response, no docs
-// available) just means "fall through to the normal investigation"; it is
-// purely an optimization and must never itself cause a failure.
+// Tiered answer lookup, cheap first: tries to answer purely from the 3
+// pre-generated docs before the ReAct loop starts. Any failure here just
+// falls through to the normal investigation — it must never itself fail.
 async function tryFastPathFromDocs(
   question: string,
   session: DeepDiveSession,
@@ -93,7 +59,38 @@ async function tryFastPathFromDocs(
     const responseText = await callWithFallback(
       reasoningProviders,
       prompt,
-      { maxTokens: FAST_PATH_MAX_TOKENS, temperature: FAST_PATH_TEMPERATURE },
+      { maxTokens: INVESTIGATOR_FAST_PATH_MAX_TOKENS, temperature: INVESTIGATOR_FAST_PATH_TEMPERATURE },
+      rateLimiters,
+      signal,
+    );
+    const parsed = FastPathAnswerSchema.parse(extractJSON(responseText));
+
+    if (parsed.answerable && parsed.answer !== undefined && parsed.answer.trim().length > 0) {
+      return parsed.answer;
+    }
+
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// Reduced-context fast path for short/simple queries (see isSimpleQuery),
+// tried only after tryFastPathFromDocs already missed, using just each
+// summarized file's path + one-line purpose instead of the 3 full docs.
+async function trySimpleQueryFastPath(
+  question: string,
+  session: DeepDiveSession,
+  reasoningProviders: LLMProvider[],
+  rateLimiters: Map<string, TokenBucketRateLimiter>,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  try {
+    const prompt = buildSimpleQueryFastPathPrompt(question, session.repoMeta, [...session.summariesMap.values()]);
+    const responseText = await callWithFallback(
+      reasoningProviders,
+      prompt,
+      { maxTokens: INVESTIGATOR_FAST_PATH_MAX_TOKENS, temperature: INVESTIGATOR_FAST_PATH_TEMPERATURE },
       rateLimiters,
       signal,
     );
@@ -128,9 +125,7 @@ async function runInvestigation(
   if (fastPathAnswer !== undefined) {
     emit(onEvent, 'fast_path_hit', { message: 'Answered from the pre-generated documents — no source investigation needed.' });
     // Callers streaming events (e.g. the API's SSE endpoint) close on the
-    // first 'answer' event — without this, a fast-path hit would never emit
-    // one and every consumer would have to wait out its own safety timeout
-    // instead of closing the instant the (already-available) answer is ready.
+    // first 'answer' event, so a fast-path hit must still emit one.
     emit(onEvent, 'answer', { answer: fastPathAnswer });
     touchSession(session);
 
@@ -141,11 +136,42 @@ async function runInvestigation(
       iterations: 0,
       filesExamined: [],
       answeredFromDocs: true,
+      answeredFromSummaries: false,
       reasoningTrace: [],
     };
   }
 
   emit(onEvent, 'fast_path_miss', { message: 'Pre-generated documents did not cover this — starting a full investigation.' });
+
+  // An ADDITIONAL cheap attempt, only for simple queries and only after the
+  // doc-based fast path already missed — an uncertain result here still
+  // falls through to the full pipeline, exactly like a doc-fast-path miss.
+  if (isSimpleQuery(question)) {
+    emit(onEvent, 'simple_query_check', { message: 'Question looks simple — checking file summaries before a full investigation...' });
+
+    const simpleAnswer = await trySimpleQueryFastPath(question, session, providers.reasoningProviders, rateLimiters, signal);
+
+    touchProgress();
+
+    if (simpleAnswer !== undefined) {
+      emit(onEvent, 'simple_query_hit', { message: 'Answered from file summaries — no full investigation needed.' });
+      emit(onEvent, 'answer', { answer: simpleAnswer });
+      touchSession(session);
+
+      return {
+        question,
+        answer: simpleAnswer,
+        plan: '(answered directly from file summaries via the short-query fast path — no live investigation needed)',
+        iterations: 0,
+        filesExamined: [],
+        answeredFromDocs: false,
+        answeredFromSummaries: true,
+        reasoningTrace: [],
+      };
+    }
+
+    emit(onEvent, 'simple_query_miss', { message: 'File summaries did not cover this — starting a full investigation.' });
+  }
 
   const ctx: AgentContext = {
     sandboxPath: session.sandboxPath,
@@ -155,7 +181,7 @@ async function runInvestigation(
     generatedDocs: session.generatedDocs,
   };
 
-  const scratchpad: ScratchpadEntry[] = [];
+  const scratchpad: AgentScratchpadEntry[] = [];
   const filesExaminedThisCall = new Set<string>();
   let iterationsUsed = 0;
   let plan = '(no plan available — the initial planning response could not be parsed)';
@@ -171,8 +197,7 @@ async function runInvestigation(
 
     try {
       // Iteration 1 merges planning and the first tool-call decision into one
-      // call (quota conservation — see MAX_ITERATIONS's comment for the
-      // resulting worst-case call count).
+      // call (quota conservation — see MAX_ITERATIONS for the worst-case call count).
       if (iteration === 1) {
         const combinedPrompt = buildCombinedPlanAndDecisionPrompt(
           question,
@@ -183,7 +208,7 @@ async function runInvestigation(
         const responseText = await callWithFallback(
           providers.reasoningProviders,
           combinedPrompt,
-          { maxTokens: REASON_MAX_TOKENS, temperature: REASON_TEMPERATURE },
+          { maxTokens: INVESTIGATOR_REASON_MAX_TOKENS, temperature: INVESTIGATOR_REASON_TEMPERATURE },
           rateLimiters,
           signal,
         );
@@ -201,7 +226,7 @@ async function runInvestigation(
         const responseText = await callWithFallback(
           providers.reasoningProviders,
           reasonPrompt,
-          { maxTokens: REASON_MAX_TOKENS, temperature: REASON_TEMPERATURE },
+          { maxTokens: INVESTIGATOR_REASON_MAX_TOKENS, temperature: INVESTIGATOR_REASON_TEMPERATURE },
           rateLimiters,
           signal,
         );
@@ -291,17 +316,16 @@ async function runInvestigation(
     touchSession(session);
   }
 
-  // The loop above only ever calls the reasoning model while iterating (bounded
-  // by MAX_ITERATIONS) or until 'finish' breaks it early — no reasoning call is
-  // ever made once either condition is hit. Exactly one synthesis call follows,
-  // regardless of how the loop ended.
+  // The loop above only ever calls the reasoning model while iterating
+  // (bounded by MAX_ITERATIONS) or until 'finish' breaks it early — exactly
+  // one synthesis call follows, regardless of how the loop ended.
   const filesExamined = [...filesExaminedThisCall];
   const synthesisPrompt = buildSynthesisPrompt({ question, plan, scratchpad, iteration: iterationsUsed }, filesExamined);
 
   const answer = await callWithFallback(
     providers.synthesisProviders,
     synthesisPrompt,
-    { maxTokens: SYNTHESIS_MAX_TOKENS, temperature: SYNTHESIS_TEMPERATURE },
+    { maxTokens: AGENT_SYNTHESIS_MAX_TOKENS, temperature: AGENT_SYNTHESIS_TEMPERATURE },
     rateLimiters,
     signal,
   );
@@ -316,6 +340,7 @@ async function runInvestigation(
     iterations: iterationsUsed,
     filesExamined,
     answeredFromDocs: false,
+    answeredFromSummaries: false,
     reasoningTrace: scratchpad,
   };
 }
@@ -326,12 +351,10 @@ export async function investigate(
   providers: AgentProviders,
   rateLimiters: Map<string, TokenBucketRateLimiter>,
   onEvent?: (event: AgentEvent) => void,
-  // PRD §4.7's 60s bound stays the default per-step watchdog for every real
-  // caller (see the STEP_TIMEOUT_MS comment above for what "per-step" means
-  // now); this is exposed only so diagnostic tooling (manual-test-agent.ts)
-  // can give real, possibly rate-limited network calls more per-step room
-  // without loosening the production default.
-  timeoutMs: number = STEP_TIMEOUT_MS,
+  // Defaults to INVESTIGATOR_STEP_TIMEOUT_MS for every real caller; exposed
+  // only so diagnostic tooling can give rate-limited network calls more room
+  // per step without loosening the production default.
+  timeoutMs: number = INVESTIGATOR_STEP_TIMEOUT_MS,
 ): Promise<InvestigationResult> {
   const controller = new AbortController();
   const startedAt = Date.now();
@@ -348,7 +371,7 @@ export async function investigate(
     const sinceProgress = now - lastProgressAt;
     const sinceStart = now - startedAt;
 
-    if (sinceProgress >= SOFT_TIMEOUT_MS && !softNudgeSentForThisGap) {
+    if (sinceProgress >= INVESTIGATOR_SOFT_TIMEOUT_MS && !softNudgeSentForThisGap) {
       softNudgeSentForThisGap = true;
       emit(onEvent, 'progress', { message: 'Still working on this — it is taking a bit longer than usual...' });
     }
@@ -357,12 +380,12 @@ export async function investigate(
       controller.abort(
         new Error(`Deep Dive investigation made no progress for ${Math.round(sinceProgress / 1000)}s (treating as stuck, not slow)`),
       );
-    } else if (sinceStart >= SESSION_SAFETY_CAP_MS) {
+    } else if (sinceStart >= INVESTIGATOR_SESSION_SAFETY_CAP_MS) {
       controller.abort(
-        new Error(`Deep Dive investigation exceeded the absolute safety-net duration of ${Math.round(SESSION_SAFETY_CAP_MS / 1000)}s`),
+        new Error(`Deep Dive investigation exceeded the absolute safety-net duration of ${Math.round(INVESTIGATOR_SESSION_SAFETY_CAP_MS / 1000)}s`),
       );
     }
-  }, WATCHDOG_TICK_MS);
+  }, INVESTIGATOR_WATCHDOG_TICK_MS);
 
   try {
     return await Promise.race([
