@@ -54,6 +54,7 @@ function fakeInvestigationResult(question: string): core.InvestigationResult {
     iterations: 1,
     filesExamined: [],
     answeredFromDocs: false,
+    answeredFromSummaries: false,
     reasoningTrace: [],
   };
 }

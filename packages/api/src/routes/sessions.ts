@@ -1,19 +1,11 @@
-import type { AgentProviders, DeepDiveSession, LLMProvider } from '@sleuth/core';
-import { createProviderChain, createSession, investigate, redactSecrets, terminateSession, TokenBucketRateLimiter, touchSession } from '@sleuth/core';
+import type { DeepDiveSession } from '@sleuth/core';
+import { buildDeepDiveAgentProviders, buildDeepDiveAgentRateLimiters, createSession, investigate, redactSecrets, terminateSession, touchSession } from '@sleuth/core';
 import type { Request, Response } from 'express';
 import { Router } from 'express';
 import { v4 as uuidv4 } from 'uuid';
 import { z } from 'zod';
 
 import type { AppState, InvestigationRecord } from '../state';
-
-// Mirrors packages/cli/src/ask.ts's own provider/rate-limiter setup — the two
-// are not shared via @sleuth/core yet (each interface owns its own thin
-// presentation-adjacent wiring for now); worth hoisting into core if a third
-// caller ever needs it, per CLAUDE.md's "CLI and Web call identical core
-// functions" principle, but out of scope for this API-only task.
-const GROQ_FREE_TIER_RPM = 28;
-const GEMINI_FREE_TIER_RPM = 13;
 
 // Safety net so a stream can never hang forever if `investigate()` never
 // emits an 'answer' event (e.g. it rejects before producing one).
@@ -22,34 +14,6 @@ const SSE_POLL_INTERVAL_MS = 200;
 
 const StartSessionRequestSchema = z.object({ runId: z.string() });
 const AskRequestSchema = z.object({ question: z.string().min(1) });
-
-function buildAgentProviders(): AgentProviders {
-  return {
-    reasoningProviders: createProviderChain({
-      groqApiKeyEnvVar: 'GROQ_DEEP_DIVE_AGENT_API_KEY',
-      groqModel: 'llama-3.1-8b-instant',
-    }),
-    synthesisProviders: createProviderChain({
-      groqApiKeyEnvVar: 'GROQ_DEEP_DIVE_AGENT_API_KEY',
-      groqModel: 'llama-3.3-70b-versatile',
-    }),
-  };
-}
-
-function buildRateLimiters(providers: AgentProviders): Map<string, TokenBucketRateLimiter> {
-  const rateLimiters = new Map<string, TokenBucketRateLimiter>();
-  const allProviders: LLMProvider[] = [...providers.reasoningProviders, ...providers.synthesisProviders];
-
-  for (const provider of allProviders) {
-    if (!rateLimiters.has(provider.name)) {
-      const requestsPerMinute = provider.name === 'groq' ? GROQ_FREE_TIER_RPM : GEMINI_FREE_TIER_RPM;
-
-      rateLimiters.set(provider.name, new TokenBucketRateLimiter(requestsPerMinute, requestsPerMinute / 60));
-    }
-  }
-
-  return rateLimiters;
-}
 
 function errorMessage(err: unknown): string {
   return redactSecrets(err instanceof Error ? err.message : String(err));
@@ -122,8 +86,8 @@ export function createSessionsRouter(state: AppState): Router {
 
     state.investigations.set(investigationId, record);
 
-    const providers = buildAgentProviders();
-    const rateLimiters = buildRateLimiters(providers);
+    const providers = buildDeepDiveAgentProviders();
+    const rateLimiters = buildDeepDiveAgentRateLimiters(providers);
 
     touchSession(session);
 
