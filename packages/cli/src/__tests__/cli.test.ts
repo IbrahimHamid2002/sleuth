@@ -329,6 +329,7 @@ describe('runAskCommand', () => {
       iterations: 0,
       filesExamined: [],
       answeredFromDocs: true,
+      answeredFromSummaries: false,
       reasoningTrace: [],
     });
 
@@ -360,6 +361,7 @@ describe('runAskCommand', () => {
       iterations: 0,
       filesExamined: [],
       answeredFromDocs: true,
+      answeredFromSummaries: false,
       reasoningTrace: [],
     });
 
@@ -392,6 +394,7 @@ describe('runAskCommand', () => {
         iterations: 2,
         filesExamined: ['src/index.ts'],
         answeredFromDocs: false,
+        answeredFromSummaries: false,
         reasoningTrace: [],
       };
     });
@@ -492,6 +495,7 @@ describe('config', () => {
     delete process.env.GROQ_SUMMARIZER_API_KEY;
     delete process.env.GROQ_SYNTHESIZER_API_KEY;
     delete process.env.GROQ_DEEP_DIVE_AGENT_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
 
     const outputDir = mkdtempSync(join(tmpdir(), 'sleuth-cli-out-'));
     const sandboxPath = mkdtempSync(join(tmpdir(), 'sleuth-cli-sandbox-'));
@@ -500,6 +504,7 @@ describe('config', () => {
       GROQ_SUMMARIZER_API_KEY: 'summarizer-key',
       GROQ_SYNTHESIZER_API_KEY: 'synthesizer-key',
       GROQ_DEEP_DIVE_AGENT_API_KEY: 'agent-key',
+      OPENROUTER_API_KEY: 'openrouter-key',
       GEMINI_API_KEY: '',
     });
     runPipeline.mockResolvedValue({
@@ -522,20 +527,52 @@ describe('config', () => {
       'GROQ_SUMMARIZER_API_KEY',
       'GROQ_SYNTHESIZER_API_KEY',
       'GROQ_DEEP_DIVE_AGENT_API_KEY',
+      'OPENROUTER_API_KEY',
       'GEMINI_API_KEY',
     ]);
     expect(process.env.GROQ_SUMMARIZER_API_KEY).toBe('summarizer-key');
     expect(process.env.GROQ_SYNTHESIZER_API_KEY).toBe('synthesizer-key');
     expect(process.env.GROQ_DEEP_DIVE_AGENT_API_KEY).toBe('agent-key');
+    expect(process.env.OPENROUTER_API_KEY).toBe('openrouter-key');
     expect(readConfig().GROQ_SUMMARIZER_API_KEY).toBe('summarizer-key');
     expect(readConfig().GROQ_SYNTHESIZER_API_KEY).toBe('synthesizer-key');
     expect(readConfig().GROQ_DEEP_DIVE_AGENT_API_KEY).toBe('agent-key');
+    expect(readConfig().OPENROUTER_API_KEY).toBe('openrouter-key');
     // Blank answer for the optional Gemini key is never persisted.
     expect(readConfig().GEMINI_API_KEY).toBeUndefined();
 
     delete process.env.GROQ_SUMMARIZER_API_KEY;
     delete process.env.GROQ_SYNTHESIZER_API_KEY;
     delete process.env.GROQ_DEEP_DIVE_AGENT_API_KEY;
+    delete process.env.OPENROUTER_API_KEY;
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(sandboxPath, { recursive: true, force: true });
+  });
+
+  it('never prompts when a usable OpenRouter key already covers the fallback chain, even with no Groq/Gemini key set', async () => {
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.GROQ_SUMMARIZER_API_KEY;
+    process.env.OPENROUTER_API_KEY = 'already-configured-openrouter-key';
+
+    const outputDir = mkdtempSync(join(tmpdir(), 'sleuth-cli-out-'));
+    const sandboxPath = mkdtempSync(join(tmpdir(), 'sleuth-cli-sandbox-'));
+
+    runPipeline.mockResolvedValue({
+      meta: fakeRepoMeta(),
+      summaries: fakeSummaries(),
+      synthesis: { readme: '# README', architecture: '# ARCHITECTURE', onboarding: '# ONBOARDING' },
+      symbolIndex: new Map(),
+      auditLog: [],
+      sandboxPath,
+      durationMs: 10,
+      failedFiles: [],
+    });
+
+    await runAnalyzeCommand('/local/path/bar', { output: outputDir });
+
+    expect(promptMock).not.toHaveBeenCalled();
+
+    delete process.env.OPENROUTER_API_KEY;
     rmSync(outputDir, { recursive: true, force: true });
     rmSync(sandboxPath, { recursive: true, force: true });
   });
