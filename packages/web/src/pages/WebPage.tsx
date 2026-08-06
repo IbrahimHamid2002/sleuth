@@ -5,7 +5,7 @@ import { useNavigate } from 'react-router-dom';
 
 import { useAnalyzeRepoMutation } from '@/api';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
@@ -15,6 +15,12 @@ import { useToast } from '@/hooks/use-toast';
 // so an obviously invalid URL is caught before it ever reaches the API.
 const GITHUB_REPOSITORY_URL_PATTERN = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+(\.git)?$/;
 const PAT_HELP_TEXT = 'Never stored, only used for this request';
+
+// This Card's title is the only heading on the page, so it's rendered as a
+// real <h1> instead of the shadcn CardTitle div.
+function WebPageHeading({ children }: { children: string }): React.JSX.Element {
+  return <h1 className="font-semibold leading-none tracking-tight">{children}</h1>;
+}
 
 function validateRepositoryUrl(candidateRepositoryUrl: string): string | undefined {
   if (candidateRepositoryUrl.length === 0) {
@@ -41,6 +47,7 @@ export function WebPage(): React.JSX.Element {
   const repositoryUrlInputId = useId();
   const repositoryUrlErrorId = useId();
   const personalAccessTokenInputId = useId();
+  const personalAccessTokenHelpId = useId();
   const privateRepositorySectionContentId = useId();
 
   const isSubmitDisabled = analyzeRepoMutationState.isLoading;
@@ -83,10 +90,13 @@ export function WebPage(): React.JSX.Element {
   }
 
   return (
-    <div className="container flex justify-center py-12">
-      <Card className="w-full max-w-xl">
+    <div id="main-content" tabIndex={-1} className="container flex justify-center py-12">
+      {/* min-w-0 overrides the flex item's default min-width:auto, which
+         otherwise refuses to shrink below the card's content width and
+         pushes the card (and page) past narrow viewports. */}
+      <Card className="w-full min-w-0 max-w-xl">
         <CardHeader>
-          <CardTitle>Analyze a repository</CardTitle>
+          <WebPageHeading>Analyze a repository</WebPageHeading>
           <CardDescription>
             Enter a public or private GitHub repository URL to generate README, ARCHITECTURE, and
             ONBOARDING documentation.
@@ -96,7 +106,8 @@ export function WebPage(): React.JSX.Element {
           <form noValidate onSubmit={(event) => void handleSubmit(event)} className="flex flex-col gap-6">
             <div className="flex flex-col gap-2">
               <label htmlFor={repositoryUrlInputId} className="text-sm font-medium">
-                Repository URL
+                Repository URL <span aria-hidden="true">*</span>
+                <span className="sr-only"> (required)</span>
               </label>
               <Input
                 id={repositoryUrlInputId}
@@ -106,8 +117,12 @@ export function WebPage(): React.JSX.Element {
                 placeholder="https://github.com/owner/repo"
                 value={repositoryUrl}
                 disabled={isSubmitDisabled}
+                aria-required="true"
                 aria-invalid={repositoryUrlValidationError !== undefined}
                 aria-describedby={repositoryUrlValidationError !== undefined ? repositoryUrlErrorId : undefined}
+                className={
+                  repositoryUrlValidationError !== undefined ? 'border-red-700 dark:border-red-300' : undefined
+                }
                 onChange={(event) => {
                   setRepositoryUrl(event.target.value);
 
@@ -117,7 +132,7 @@ export function WebPage(): React.JSX.Element {
                 }}
               />
               {repositoryUrlValidationError !== undefined && (
-                <p id={repositoryUrlErrorId} role="alert" className="text-sm text-destructive">
+                <p id={repositoryUrlErrorId} role="alert" className="text-sm text-red-700 dark:text-red-300">
                   {repositoryUrlValidationError}
                 </p>
               )}
@@ -148,7 +163,7 @@ export function WebPage(): React.JSX.Element {
                         aria-label="About the Personal Access Token field"
                         className="inline-flex items-center justify-center rounded-full text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
                       >
-                        <InfoIcon size={14} />
+                        <InfoIcon size={14} aria-hidden="true" />
                       </button>
                     </TooltipTrigger>
                     <TooltipContent>{PAT_HELP_TEXT}</TooltipContent>
@@ -161,9 +176,12 @@ export function WebPage(): React.JSX.Element {
                   placeholder="ghp_..."
                   value={personalAccessToken}
                   disabled={isSubmitDisabled}
+                  aria-describedby={personalAccessTokenHelpId}
                   onChange={(event) => setPersonalAccessToken(event.target.value)}
                 />
-                <p className="text-xs text-muted-foreground">{PAT_HELP_TEXT}</p>
+                <p id={personalAccessTokenHelpId} className="text-xs text-muted-foreground">
+                  {PAT_HELP_TEXT}
+                </p>
               </CollapsibleContent>
             </Collapsible>
 
