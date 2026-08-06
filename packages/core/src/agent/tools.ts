@@ -2,39 +2,12 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { z } from 'zod';
 
+import { AGENT_TOOLS_ALREADY_EXAMINED_PREFIX, AGENT_TOOLS_CONTEXT_LINES, AGENT_TOOLS_MAX_DOC_SEARCH_RESULTS, AGENT_TOOLS_MAX_MATCH_OUTPUT_LINES, AGENT_TOOLS_MAX_READ_CHARS } from '../constants';
 import { ToolArgsSchemas } from '../schemas';
 import { assertSafePath } from '../security/path-guard';
-import type { FileSummary, RepoMeta, SynthesisResult } from '../types';
+import type { AgentTool } from '../types';
 
-export interface AgentContext {
-  sandboxPath: string;
-  repoMeta: RepoMeta;
-  summariesMap: Map<string, FileSummary>;
-  visitedFiles: Map<string, string>;
-  // The 3 pre-generated docs, when available — see search_docs below and
-  // investigator.ts's fast-path step, which both exist specifically so a
-  // question answerable from these doesn't need a single live tool call.
-  generatedDocs?: SynthesisResult;
-}
-
-export interface AgentTool {
-  name: string;
-  description: string;
-  parameters: z.ZodSchema;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- justified: args are Zod-validated against `parameters` by the caller before execute() runs, so a concrete type here would just duplicate that per-tool contract
-  execute: (args: any, ctx: AgentContext) => Promise<string>;
-}
-
-const MAX_READ_CHARS = 4000;
-const ALREADY_EXAMINED_PREFIX = '[Already examined earlier in this session]\n';
-
-// Fix #2 (Deep Dive shallow-answer investigation): a bare matching line with no
-// surrounding code gives the agent almost nothing to reason about without
-// spending a further iteration on a full read_file. CONTEXT_LINES is the
-// fixed-window fallback; enclosing-block detection (see detectEnclosingBlock)
-// is preferred when it fits within MAX_MATCH_OUTPUT_LINES.
-const CONTEXT_LINES = 3;
-const MAX_MATCH_OUTPUT_LINES = 18;
+export type { AgentContext, AgentTool } from '../types';
 
 function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -51,10 +24,9 @@ function indentOf(line: string): number {
 }
 
 // Walks outward from a match to find the smallest enclosing indentation block
-// (function/class/etc.) via indentation alone — not a real parser, just a
-// heuristic that works for consistently-indented TS/JS/most mainstream
-// languages. Returns null when the match is already at top-level indentation
-// (nothing to enclose) so the caller falls back to a fixed window.
+// via indentation alone — a heuristic, not a real parser. Returns null when
+// the match is already at top-level indentation, so the caller falls back to
+// a fixed window.
 function detectEnclosingBlock(lines: string[], matchIndex: number): [number, number] | null {
   const matchIndent = indentOf(lines[matchIndex] ?? '');
 
@@ -96,25 +68,24 @@ function detectEnclosingBlock(lines: string[], matchIndex: number): [number, num
   return [start, end];
 }
 
-// Renders one match as a bounded, readable block: enclosing block when it fits,
-// else a fixed +/-CONTEXT_LINES window, always capped at MAX_MATCH_OUTPUT_LINES
-// so a call with many matches can't blow up the agent's context. The matched
-// line is prefixed with ">>" so the agent can tell match from context at a glance.
+// Renders one match as a bounded, readable block: enclosing block when it
+// fits, else a fixed context window, always capped at MAX_MATCH_OUTPUT_LINES.
+// The matched line is prefixed ">>" so the agent can tell match from context.
 function formatMatchBlock(path: string, lines: string[], matchIndex: number): string {
   const enclosing = detectEnclosingBlock(lines, matchIndex);
   let start: number;
   let end: number;
 
-  if (enclosing !== null && enclosing[1] - enclosing[0] + 1 <= MAX_MATCH_OUTPUT_LINES) {
+  if (enclosing !== null && enclosing[1] - enclosing[0] + 1 <= AGENT_TOOLS_MAX_MATCH_OUTPUT_LINES) {
     [start, end] = enclosing;
   } else {
-    start = Math.max(0, matchIndex - CONTEXT_LINES);
-    end = Math.min(lines.length - 1, matchIndex + CONTEXT_LINES);
+    start = Math.max(0, matchIndex - AGENT_TOOLS_CONTEXT_LINES);
+    end = Math.min(lines.length - 1, matchIndex + AGENT_TOOLS_CONTEXT_LINES);
   }
 
-  if (end - start + 1 > MAX_MATCH_OUTPUT_LINES) {
-    start = Math.max(start, matchIndex - Math.floor(MAX_MATCH_OUTPUT_LINES / 2));
-    end = Math.min(end, start + MAX_MATCH_OUTPUT_LINES - 1);
+  if (end - start + 1 > AGENT_TOOLS_MAX_MATCH_OUTPUT_LINES) {
+    start = Math.max(start, matchIndex - Math.floor(AGENT_TOOLS_MAX_MATCH_OUTPUT_LINES / 2));
+    end = Math.min(end, start + AGENT_TOOLS_MAX_MATCH_OUTPUT_LINES - 1);
   }
 
   const rendered: string[] = [];
@@ -134,7 +105,7 @@ const readFileTool: AgentTool = {
     'Reads real file content directly from the repository — this is the AUTHORITATIVE source for how code actually behaves. Always call this (not get_file_summary) before finalizing any answer that describes implementation details, logic, or behavior. Returns up to 4000 characters at a time starting at "offset" (default 0); pass "length" to change the chunk size. If the response says more content exists, call again with the given offset to continue — never assume a large file has been fully seen until the response says there is no more.',
   parameters: ToolArgsSchemas.read_file,
   execute: async (args, ctx) => {
-    const { path, offset = 0, length = MAX_READ_CHARS } = args as z.infer<typeof ToolArgsSchemas.read_file>;
+    const { path, offset = 0, length = AGENT_TOOLS_MAX_READ_CHARS } = args as z.infer<typeof ToolArgsSchemas.read_file>;
 
     let fullContent = ctx.visitedFiles.get(path);
 
@@ -146,18 +117,17 @@ const readFileTool: AgentTool = {
       }
 
       ctx.visitedFiles.set(path, fullContent);
-    } else if (offset === 0 && length === MAX_READ_CHARS) {
+    } else if (offset === 0 && length === AGENT_TOOLS_MAX_READ_CHARS) {
       // Exact-duplicate default request already served this session — signal
       // that explicitly rather than silently re-returning the same content.
-      return `${ALREADY_EXAMINED_PREFIX}${fullContent.slice(0, MAX_READ_CHARS)}`;
+      return `${AGENT_TOOLS_ALREADY_EXAMINED_PREFIX}${fullContent.slice(0, AGENT_TOOLS_MAX_READ_CHARS)}`;
     }
 
     const totalLength = fullContent.length;
 
-    // Observed live: a confused agent re-requesting an already-exhausted
-    // offset got back a degenerate "Showing chars 4000-4000 of 914" message
-    // and looped on it for several iterations instead of stopping or
-    // backtracking. An explicit, actionable message heads that off.
+    // An already-exhausted offset used to return a degenerate "Showing chars
+    // 4000-4000 of 914" message that a confused agent looped on for several
+    // iterations — an explicit, actionable message heads that off.
     if (offset > 0 && offset >= totalLength) {
       return `File "${path}" is only ${totalLength} characters long — offset ${offset} is past the end of the file. There is no more content to read; call again with a smaller offset (e.g. 0) only if you need to re-read an earlier part.`;
     }
@@ -271,15 +241,9 @@ const findReferencesTool: AgentTool = {
   },
 };
 
-const MAX_DOC_SEARCH_RESULTS = 10;
-
-// Part of the "cheap first, expensive only if needed" fix for shallow/slow
-// Deep Dive answers: the 3 pre-generated docs already summarize the whole
-// repo, so a question answerable from them needs zero live source access.
-// investigator.ts's deterministic fast-path step tries these docs whole
-// before the ReAct loop even starts; this tool exists as a mid-loop fallback
-// for the cases the fast-path didn't fully resolve, or when the model wants
-// to re-check a specific term.
+// Mid-loop fallback for the pre-generated docs: investigator.ts's fast-path
+// step already tries these whole before the ReAct loop starts; this tool
+// covers cases that missed, or when the model wants to re-check a term.
 const searchDocsTool: AgentTool = {
   name: 'search_docs',
   description:
@@ -301,14 +265,14 @@ const searchDocsTool: AgentTool = {
     const blocks: string[] = [];
 
     for (const doc of docs) {
-      if (blocks.length >= MAX_DOC_SEARCH_RESULTS) {
+      if (blocks.length >= AGENT_TOOLS_MAX_DOC_SEARCH_RESULTS) {
         break;
       }
 
       const lines = doc.content.split('\n');
 
       for (const [index, line] of lines.entries()) {
-        if (blocks.length >= MAX_DOC_SEARCH_RESULTS) {
+        if (blocks.length >= AGENT_TOOLS_MAX_DOC_SEARCH_RESULTS) {
           break;
         }
 
