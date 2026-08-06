@@ -14,7 +14,7 @@ export function LandingPage(): React.JSX.Element {
   const heroEntranceAnimate = { opacity: 1, y: 0 };
 
   return (
-    <div className="container flex flex-col items-center gap-16 py-16 sm:py-24">
+    <div id="main-content" tabIndex={-1} className="container flex flex-col items-center gap-16 py-16 sm:py-24">
       <motion.div
         initial={heroEntranceInitial}
         animate={heroEntranceAnimate}
@@ -22,7 +22,11 @@ export function LandingPage(): React.JSX.Element {
         className="w-full max-w-3xl"
       >
         <Card className="relative overflow-hidden border-2">
-          <BorderBeam size={200} duration={10} colorFrom="hsl(var(--primary))" colorTo="hsl(var(--ring))" />
+          {/* BorderBeam animates infinitely with no built-in reduced-motion
+             check, so it's only rendered when motion is allowed. */}
+          {!prefersReducedMotion && (
+            <BorderBeam size={200} duration={10} colorFrom="hsl(var(--primary))" colorTo="hsl(var(--ring))" />
+          )}
           <CardContent className="flex flex-col items-center gap-6 px-6 py-14 text-center sm:px-12">
             <h1 className="text-4xl font-bold tracking-tight sm:text-6xl">Sleuth</h1>
             <p className="text-lg font-medium text-muted-foreground sm:text-xl">
