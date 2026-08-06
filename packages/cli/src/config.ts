@@ -5,19 +5,13 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 
-export const CONFIG_KEYS = [
-  'GROQ_SUMMARIZER_API_KEY',
-  'GROQ_SYNTHESIZER_API_KEY',
-  'GROQ_DEEP_DIVE_AGENT_API_KEY',
-  'GEMINI_API_KEY',
-] as const;
+import { CONFIG_GEMINI_KEYS_URL, CONFIG_GROQ_KEYS_URL, CONFIG_KEYS, CONFIG_OPENROUTER_KEYS_URL } from './constants';
+import type { ConfigKey } from './types';
 
-export type ConfigKey = (typeof CONFIG_KEYS)[number];
+export { CONFIG_KEYS } from './constants';
+export type { ConfigKey } from './types';
 
 const ConfigSchema = z.record(z.string());
-
-const GROQ_KEYS_URL = 'https://console.groq.com/keys';
-const GEMINI_KEYS_URL = 'https://aistudio.google.com/api-keys';
 
 // Resolved lazily (not a module-level constant) — mirrors analyze.ts's
 // getSessionDir/getSessionFile pattern so tests can point HOME/USERPROFILE
@@ -80,13 +74,11 @@ function isKeyUsable(envVar: ConfigKey): boolean {
   return process.env[envVar] !== undefined && process.env[envVar] !== '';
 }
 
-// Prompts once, only when neither the requested Groq role key nor the Gemini
-// fallback is available anywhere (env or persisted config) — never nags if
-// the pipeline can already fall back to Gemini. Asks for each of the 4 known
-// keys individually (skipping ones already configured) in one inquirer.prompt
-// call — inquirer runs an array of questions sequentially in a single call.
+// Prompts once, only when neither the requested Groq role key nor any
+// fallback (OpenRouter, then Gemini) is available anywhere — never nags if
+// the pipeline can already fall back to one of them.
 export async function ensureGroqApiKey(requiredEnvVar: ConfigKey): Promise<void> {
-  if (isKeyUsable(requiredEnvVar) || isKeyUsable('GEMINI_API_KEY')) {
+  if (isKeyUsable(requiredEnvVar) || isKeyUsable('OPENROUTER_API_KEY') || isKeyUsable('GEMINI_API_KEY')) {
     return;
   }
 
@@ -96,9 +88,10 @@ export async function ensureGroqApiKey(requiredEnvVar: ConfigKey): Promise<void>
     return;
   }
 
-  console.log(chalk.yellow('🔑 No API Keys found! Please enter your Groq + Gemini API Keys'));
-  console.log(chalk.dim(`   Groq (free):   ${GROQ_KEYS_URL}`));
-  console.log(chalk.dim(`   Gemini (free): ${GEMINI_KEYS_URL}`));
+  console.log(chalk.yellow('🔑 No API Keys found! Please enter your Groq + OpenRouter + Gemini API Keys'));
+  console.log(chalk.dim(`   Groq (free):       ${CONFIG_GROQ_KEYS_URL}`));
+  console.log(chalk.dim(`   OpenRouter (free): ${CONFIG_OPENROUTER_KEYS_URL}`));
+  console.log(chalk.dim(`   Gemini (free):     ${CONFIG_GEMINI_KEYS_URL}`));
 
   const answers = await inquirer.prompt<Partial<Record<ConfigKey, string>>>(
     missingKeys.map((key) => ({
