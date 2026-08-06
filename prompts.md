@@ -3222,3 +3222,268 @@ REPORT BACK:
 - Deviations from the specification and why
 
 ---
+
+## Accessibility and responsive-design hardening audit (Task 19C-1)
+
+### Goal
+
+Bring the five-route web interface as close as possible to a 100 Lighthouse Accessibility score and verify it works responsively on mobile, tablet, desktop, keyboard-only navigation, and reduced-motion environments, using only the approved cross-page target file list.
+
+### User Prompt
+
+Read SESSION_SUMMARY.md first. 
+Then,
+Read CLAUDE.md Sections 1, 2, 3, 4, and 5 in full. Read PRD.md
+Section 4.9. Do NOT deviate from these.
+
+Prerequisites:
+- Task 19A is complete.
+- Task 19B-1 is complete.
+- Task 19B-2 is complete.
+
+This is an accessibility and responsive-design hardening pass. It does
+not add new product features and must not replace the existing visual
+design, RTK Query data layer, routing, or business logic.
+
+This audit intentionally covers the approved cross-page target files.
+Do not stop because this approved list contains more than three files.
+If another source file must be modified, STOP and explain why before
+proceeding.
+
+Approved target files:
+- packages/web/src/components/navbar.tsx
+- packages/web/src/components/mode-toggle.tsx
+- packages/web/src/pages/LandingPage.tsx
+- packages/web/src/pages/DocsPage.tsx
+- packages/web/src/pages/WebPage.tsx
+- packages/web/src/pages/AnalysisPage.tsx
+- packages/web/src/pages/ResultsPage.tsx
+- packages/web/index.html
+- prompts.md
+
+GOAL:
+Bring the complete five-route web interface as close as possible to a
+100 Lighthouse Accessibility score and ensure it works responsively on
+mobile, tablet, desktop, keyboard-only navigation, and reduced-motion
+environments.
+
+Do not add a new dependency unless absolutely necessary and explicitly
+approved by CLAUDE.md. This work should primarily use semantic HTML,
+ARIA attributes, Tailwind utilities, shadcn accessibility behavior, and
+motion/react's reduced-motion support.
+
+ACCESSIBILITY AUDIT:
+
+1. DOCUMENT LANGUAGE AND LANDMARKS
+- Ensure packages/web/index.html has a valid `<html lang="en">`.
+- Every route must have a clear `<main>` landmark.
+- Navbar must use a semantic `<nav>` element with an accessible label.
+- Avoid duplicate main landmarks or improperly nested landmarks.
+- Add a keyboard-accessible “Skip to main content” link that becomes
+  visible on focus and targets the shared main-content element.
+- Ensure the skip-link destination can receive focus where needed.
+
+2. HEADING STRUCTURE
+- Each page must have exactly one meaningful h1.
+- Use sequential heading levels without unnecessary skipped levels.
+- Cards must not create invalid heading hierarchy.
+- Tabs and collapsible audit entries must have meaningful accessible
+  names.
+
+3. FORMS
+Audit WebPage:
+- Repository URL input must have a visible or sr-only `<label>` linked
+  through htmlFor/id.
+- PAT input must have a linked label.
+- Help text must be connected through aria-describedby.
+- Validation and API error messages must be programmatically associated
+  with the relevant form or field.
+- Invalid inputs must expose aria-invalid where appropriate.
+- Required fields must be communicated programmatically.
+- The submit button must clearly announce pending/loading state.
+- Never expose the PAT value in error messages, logs, toasts, DOM data
+  attributes, URL parameters, or persisted state.
+
+4. ICON-ONLY CONTROLS
+Audit:
+- Theme toggle
+- GitHub link
+- Collapse/expand controls
+- Dialog close buttons
+- Any download-only icon buttons
+
+Every icon-only interactive element must have a meaningful aria-label
+or aria-labelledby. Decorative icons must use aria-hidden="true".
+
+The theme button's accessible label must indicate the resulting action,
+for example:
+- “Switch to dark mode”
+- “Switch to light mode”
+
+5. IMAGES AND LOGOS
+- Every meaningful image must have accurate alt text.
+- Navbar logo should have meaningful accessible text such as
+  “Sleuth home”.
+- If the surrounding link already provides the accessible name, avoid
+  redundant announcements by treating the image appropriately.
+- Decorative images must use empty alt text.
+- Provide explicit width and height for logos where possible to avoid
+  layout shift.
+
+6. KEYBOARD SUPPORT
+Manually verify:
+- Tab
+- Shift+Tab
+- Enter
+- Space
+- Escape where dialogs/collapsibles support it
+- Arrow-key behavior for shadcn Tabs
+
+Requirements:
+- Every interactive control is keyboard reachable.
+- Focus order follows visual and logical order.
+- No keyboard traps.
+- Focus remains visible.
+- Do not remove focus outlines without an equivalent focus-visible ring.
+- Route CTA links, navbar controls, tabs, collapsible audit logs, form
+  controls, and download buttons must all work without a mouse.
+
+7. LIVE STATUS AND PROGRESS
+Audit AnalysisPage:
+- Current analysis status must be exposed through an appropriate
+  aria-live region without announcing every insignificant poll update.
+- The progress indicator must include correct progressbar semantics:
+  aria-valuemin, aria-valuemax, and aria-valuenow where applicable.
+- Include visible text for stage and progress; do not communicate state
+  using color or animation alone.
+- Errors must be announced accessibly.
+
+8. COLOR AND THEME
+Verify both required themes:
+- Light: background #FFF0C9, text #243B8F
+- Dark: background #243B8F, text #FFF0C9
+
+Check all primary, secondary, muted, disabled, border, focus, tab, card,
+toast, and link states for WCAG AA contrast. The main brand pair may
+pass while derived muted colors fail, so inspect every real state rather
+than assuming compliance.
+
+Do not change the locked primary colors. Adjust derived tokens or
+component treatment if required for contrast.
+
+9. REDUCED MOTION
+- Use motion/react's useReducedMotion or an existing centralized
+  equivalent.
+- Disable or simplify non-essential animation when the user requests
+  reduced motion.
+- Avoid flashing or rapid animation.
+- Theme icon animation, hero animation, page transitions, stepper
+  transitions, and special Magic UI effects must respect reduced-motion
+  preferences.
+- Do not create separate hand-written matchMedia logic if motion/react
+  already provides the required behavior.
+
+10. MARKDOWN, TABS, AND MERMAID
+- Ensure document tabs have accessible names and correct keyboard
+  behavior.
+- Markdown links must be distinguishable from ordinary text and have
+  visible focus.
+- External links must clearly communicate their purpose.
+- Ensure Mermaid output is associated with an accessible description
+  or text alternative.
+- Keep the original Mermaid source available to assistive technology or
+  provide a concise description/fallback.
+- A diagram rendering failure must result in readable text/code rather
+  than empty content.
+
+RESPONSIVE AUDIT:
+
+Test these approximate viewport widths:
+- 320px
+- 375px
+- 768px
+- 1024px
+- 1280px and above
+
+Verify and fix:
+
+NAVBAR:
+- Logo, theme toggle, and GitHub icon do not overlap.
+- Keyboard focus remains visible.
+- Controls have adequate touch target size, ideally at least 44x44 CSS
+  pixels where practical.
+- No horizontal overflow.
+
+LANDING PAGE:
+- Hero text remains readable.
+- CTA buttons stack appropriately on narrow screens.
+- Magic UI visuals do not cause overflow or obscure content.
+
+DOCS PAGE:
+- Code blocks scroll horizontally inside their own container rather
+  than overflowing the viewport.
+- Long command examples wrap or scroll safely.
+- Heading navigation and content cards remain readable.
+
+WEB PAGE:
+- Inputs and submit controls use available width.
+- PAT collapsible content does not overflow.
+- Form labels and validation messages remain visible.
+
+ANALYSIS PAGE:
+- Progress steps adapt to narrow screens using a vertical or compact
+  layout.
+- Current step remains obvious without relying only on color.
+- Percentage text remains visible.
+
+RESULTS PAGE:
+- Sidebar and documentation content must not be squeezed into unusable
+  columns on mobile.
+- Stack sidebar above or below the main content on narrow screens.
+- Tabs should scroll safely or wrap without causing viewport overflow.
+- Markdown tables and code blocks must scroll within their containers.
+- Download actions should stack or wrap appropriately.
+- Long audit entries, paths, and citations must wrap safely.
+
+QUALITY RULES:
+- Do not alter RTK Query endpoints or API contracts.
+- Do not create duplicate components.
+- Do not hide content merely to make mobile screenshots look cleaner.
+- Use self-explanatory variable and function names.
+- Do not use vague names such as `data`, `temp`, `val`, or `thing`.
+
+MANUAL VALIDATION:
+- Perform keyboard-only testing on all five routes.
+- Test both themes.
+- Test reduced-motion mode.
+- Test the listed viewport widths.
+- Run Lighthouse Accessibility audits against the local production
+  preview for all five routes where possible.
+- Target 100 Accessibility.
+- Do not claim 100 unless Lighthouse actually reports 100.
+- If the score is lower, report the exact findings and fix them where
+  they are within scope.
+
+VALIDATION COMMANDS:
+- Run the packages/web TypeScript check.
+- Run the packages/web production build.
+- Invoke the auto-lint skill after every file creation or modification,
+  scoped to packages/web.
+- Run lint --fix where required.
+- Resolve all accessibility-related lint, type, and build errors.
+
+Append this complete prompt verbatim to prompts.md using the exact
+CLAUDE.md rule 5 format.
+
+REPORT BACK:
+- Files changed
+- Accessibility defects found and fixed
+- Responsive defects found and fixed
+- Keyboard-test results
+- Reduced-motion test results
+- Lighthouse Accessibility scores per tested route
+- Remaining Lighthouse findings, quoted accurately
+- Build/type-check/lint results
+- Deviations and reasons
+
+---
