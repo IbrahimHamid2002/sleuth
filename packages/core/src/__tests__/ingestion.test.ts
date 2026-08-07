@@ -19,16 +19,21 @@ vi.mock('simple-git', () => ({
 
 describe('cloneRepo', () => {
   let targetDir: string;
+  const fetchMock = vi.fn();
 
   beforeEach(() => {
     targetDir = mkdtempSync(join(tmpdir(), 'sleuth-clone-test-'));
     cloneMock.mockReset();
     revparseMock.mockReset();
     revparseMock.mockResolvedValue('abc123\n');
+    fetchMock.mockReset();
+    fetchMock.mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
   });
 
   afterEach(() => {
     rmSync(targetDir, { recursive: true, force: true });
+    vi.unstubAllGlobals();
   });
 
   it('clones a valid GitHub URL with the correct depth/branch args', async () => {
@@ -49,9 +54,10 @@ describe('cloneRepo', () => {
       'Invalid GitHub repository URL',
     );
     expect(cloneMock).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it('embeds the PAT in the clone URL but never leaks it in a thrown error', async () => {
+  it('embeds the PAT in the clone URL and the pre-check header, but never leaks it in a thrown error', async () => {
     const pat = `ghp_${'x'.repeat(36)}`;
 
     cloneMock.mockRejectedValue(
@@ -66,6 +72,9 @@ describe('cloneRepo', () => {
       thrownError = err as Error;
     }
 
+    expect(fetchMock).toHaveBeenCalledWith('https://api.github.com/repos/foo/bar', {
+      headers: { Authorization: `token ${pat}` },
+    });
     expect(cloneMock).toHaveBeenCalledWith(`https://${pat}@github.com/foo/bar`, targetDir, [
       '--depth',
       '1',
@@ -73,6 +82,54 @@ describe('cloneRepo', () => {
     ]);
     expect(thrownError?.message).toBe('Authentication failed — check your token');
     expect(thrownError?.message).not.toContain(pat);
+  });
+
+  it('throws a clear auth error when the pre-check gets a 401, without attempting to clone', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 401 }));
+
+    await expect(cloneRepo('https://github.com/foo/bar', 'ghp_bad', targetDir)).rejects.toThrow(
+      'Authentication failed — check your token',
+    );
+    expect(cloneMock).not.toHaveBeenCalled();
+  });
+
+  it('throws "Repository not found" when the pre-check gets a 404 (private repo, no/wrong PAT), without attempting to clone', async () => {
+    fetchMock.mockResolvedValueOnce(new Response('{}', { status: 404 }));
+
+    await expect(cloneRepo('https://github.com/foo/bar', undefined, targetDir)).rejects.toThrow(
+      'Repository not found',
+    );
+    expect(cloneMock).not.toHaveBeenCalled();
+  });
+
+  it('treats a rate-limited 403 from the pre-check as inconclusive and still attempts the clone', async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ message: 'API rate limit exceeded for 1.2.3.4.' }), { status: 403 }),
+    );
+    cloneMock.mockResolvedValue(undefined);
+
+    const result = await cloneRepo('https://github.com/foo/bar', undefined, targetDir);
+
+    expect(cloneMock).toHaveBeenCalled();
+    expect(result.commitHash).toBe('abc123');
+  });
+
+  it('treats a genuine (non-rate-limit) 403 from the pre-check as an auth failure, without attempting to clone', async () => {
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ message: 'Forbidden' }), { status: 403 }));
+
+    await expect(cloneRepo('https://github.com/foo/bar', 'ghp_bad', targetDir)).rejects.toThrow(
+      'Authentication failed — check your token',
+    );
+    expect(cloneMock).not.toHaveBeenCalled();
+  });
+
+  it('does not block cloning when the pre-check itself fails (e.g. GitHub API unreachable)', async () => {
+    fetchMock.mockRejectedValueOnce(new Error('network down'));
+    cloneMock.mockResolvedValue(undefined);
+
+    const result = await cloneRepo('https://github.com/foo/bar', undefined, targetDir);
+
+    expect(result.commitHash).toBe('abc123');
   });
 });
 

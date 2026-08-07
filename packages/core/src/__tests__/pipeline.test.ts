@@ -109,8 +109,14 @@ describe('runPipeline', () => {
 
     createdSandboxPaths.push(result.sandboxPath);
 
-    expect(createProviderChain).toHaveBeenCalledWith('summarizer');
-    expect(createProviderChain).toHaveBeenCalledWith('synthesizer');
+    expect(createProviderChain).toHaveBeenCalledWith({
+      groqApiKeyEnvVar: 'GROQ_SUMMARIZER_API_KEY',
+      groqModel: 'llama-3.1-8b-instant',
+    });
+    expect(createProviderChain).toHaveBeenCalledWith({
+      groqApiKeyEnvVar: 'GROQ_SYNTHESIZER_API_KEY',
+      groqModel: 'llama-3.3-70b-versatile',
+    });
     expect(createProviderChain).toHaveBeenCalledTimes(2);
   });
 

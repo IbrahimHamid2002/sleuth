@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   AgentDecisionSchema,
+  CombinedPlanAndDecisionSchema,
   FileSummarySchema,
   RepoInputSchema,
   ToolArgsSchemas,
@@ -180,6 +181,39 @@ describe('AgentDecisionSchema', () => {
     });
 
     expect(result.success).toBe(true);
+  });
+});
+
+describe('CombinedPlanAndDecisionSchema', () => {
+  it('passes for a plan plus a tool_call decision', () => {
+    const result = CombinedPlanAndDecisionSchema.safeParse({
+      plan: 'Check the entry point summary, then read it if needed.',
+      thought: 'Starting with the summary',
+      action: 'tool_call',
+      toolName: 'get_file_summary',
+      toolArgs: { path: 'src/index.ts' },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('passes for a plan plus a finish decision', () => {
+    const result = CombinedPlanAndDecisionSchema.safeParse({
+      plan: 'Check the entry point summary.',
+      thought: 'Already have enough information',
+      action: 'finish',
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('fails when plan is missing', () => {
+    const result = CombinedPlanAndDecisionSchema.safeParse({
+      thought: 'thinking',
+      action: 'finish',
+    });
+
+    expect(result.success).toBe(false);
   });
 });
 
