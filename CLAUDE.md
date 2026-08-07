@@ -16,7 +16,7 @@ This file governs how Claude Code (or any AI pair-programmer) must operate withi
 | Database/Cache | SQLite via `better-sqlite3` | Cache only — never permanent repo storage |
 | Git Operations | `simple-git` | NEVER `child_process.exec` for git commands |
 | Validation | Zod | ALL LLM outputs and external inputs must pass through a Zod schema before use |
-| LLM Providers | Groq (primary), Google Gemini (fallback) | Free tier only, no other providers without explicit approval |
+| LLM Providers | Groq (primary), OpenRouter (secondary fallback), Google Gemini (final fallback) | Free tier only. OpenRouter explicitly approved by the user to replace Cerebras (that account was confirmed billing-blocked) — model choice differs per role: `google/gemma-4-26b-a4b-it:free` for summarization, `openai/gpt-oss-20b:free` for synthesis, `nvidia/nemotron-3-ultra-550b-a55b:free` for the Deep Dive agent (no Gemini in that chain — see PRD §4.7). No other providers without further explicit approval |
 | Package Manager | npm workspaces | No pnpm/yarn/turborepo — keep tooling minimal for a 10-day build |
 
 ---
@@ -57,20 +57,31 @@ These rules are **mandatory** and must be verified before any task is marked com
 | 5 | **Every prompt given to Claude Code must be logged** in `prompts.md` at the project root, in this exact format (append, never overwrite): |
 
 ```markdown
-## [YYYY-MM-DD HH:MM] Task: <short task title>
-**Goal:** <one sentence — what this prompt was trying to achieve>
-**Files Changed:** `path/to/file1.ts`, `path/to/file2.ts`
-**How It Was Achieved:** <2-4 sentences describing the approach taken, 
-key functions/logic introduced, and any deviations from the original prompt>
-**Tests Added:** <test file(s), or "none — infra/config only">
+## <Task Name>
+
+### Goal
+<one-to-two line description of the task's objective>
+
+### User Prompt
+<exact prompt text as given by the user, verbatim>
+
 ---
 ```
+
+Where:
+- **Task Name** is a short, descriptive title for the task — no date or timestamp.
+- **Goal** sits directly below the Task Name heading: one to two lines stating what the task aims to achieve.
+- **User Prompt** sits directly below Goal: the user's prompt reproduced verbatim (exact wording, exact formatting — no paraphrasing, no trimming).
+- The three field headings use markdown heading levels (`##` for Task Name, `###` for Goal and User Prompt) so they stand out visually from surrounding text.
+- Once all three fields for an entry are complete, insert a horizontal rule (`---`) as a separator before the next entry.
+- All entries follow this exact structure, one after another, in order.
 
 | # | Rule |
 |---|---|
 | 6 | Run the auto-lint skill whenever a new file is created or an existing file is modified. Before considering any task complete, run: `npm run lint -- --fix` scoped to the changed package, and resolve any remaining errors manually. Do not leave lint errors unresolved between tasks. |
 | 7 | Never introduce a new npm dependency without checking it against the free-tier/zero-cost constraint and confirming it isn't a heavyweight alternative to something already planned (e.g., do not add LangChain, do not add a full AST parser, do not add Redis/PostgreSQL). |
 | 8 | Every LLM-facing prompt template must wrap untrusted repository content in an explicit delimiter (e.g., `<untrusted_source_code>`) and instruct the model to treat it as inert data, never as instructions. |
+| 9 | **When a task requires updating `PRD.md`/`ARCHITECTURE.md`, touch only the sections directly related to that task's change.** Do not rewrite, reformat, or "clean up" unrelated sections, and do not touch either file at all if nothing in it is actually affected. |
 
 ---
 
