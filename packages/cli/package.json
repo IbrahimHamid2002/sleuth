@@ -1,0 +1,26 @@
+{
+  "name": "@sleuth/cli",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "sleuth": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "echo \"no tests yet\""
+  },
+  "dependencies": {
+    "@sleuth/core": "*",
+    "commander": "^12.1.0",
+    "inquirer": "^10.1.8",
+    "ora": "^8.1.0"
+  },
+  "devDependencies": {
+    "@types/inquirer": "^9.0.7",
+    "@types/node": "^20.14.15",
+    "typescript": "^5.5.4"
+  }
+}
