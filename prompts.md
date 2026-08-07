@@ -3487,3 +3487,25 @@ REPORT BACK:
 - Deviations and reasons
 
 ---
+
+## Add config clear command
+
+### Goal
+Add a `sleuth config clear` CLI command that deletes the persisted `~/.sleuth/config.json` file, so users can reset all saved API keys/configuration in one step.
+
+### User Prompt
+Read SESSION_SUMMARY.md file first
+Then,
+Please help me implement two new commands in my Sleuth CLI codebase using Commander.js:
+
+1. `sleuth config clear`
+   - Description: "Clear all saved API keys and configuration from ~/.sleuth/config.json"
+   - Functionality: Deletes or empties the configuration object inside ~/.sleuth/config.json (or deletes the file safely if it exists).
+   - Behavior: Output a success message confirming all configured keys have been cleared (e.g., "All saved configurations have been cleared.").
+
+Requirements:
+- Export and implement `runConfigClearCommand` in the config module/file.
+- Update the main CLI index file to register `config clear` under the existing `config` parent command.
+- Handle errors gracefully if config file do not exist when attempting to clear them.
+
+---

@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import inquirer from 'inquirer';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -133,6 +133,21 @@ export function runConfigSetCommand(key: string, value: string): void {
 
   setConfigValue(key, value);
   console.log(chalk.green(`✅ Saved ${key} to ${getConfigFile()}`));
+}
+
+export function runConfigClearCommand(): void {
+  const configFile = getConfigFile();
+
+  try {
+    if (existsSync(configFile)) {
+      unlinkSync(configFile);
+    }
+
+    console.log(chalk.green('All saved configurations have been cleared.'));
+  } catch (err) {
+    console.error(chalk.red(`Error: failed to clear configuration: ${(err as Error).message}`));
+    process.exit(1);
+  }
 }
 
 export function runConfigListCommand(): void {

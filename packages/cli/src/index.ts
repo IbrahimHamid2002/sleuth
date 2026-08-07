@@ -3,7 +3,7 @@ import { Command } from 'commander';
 
 import { runAnalyzeCommand } from './analyze';
 import { runAskCommand } from './ask';
-import { hydrateEnvFromConfig, runConfigListCommand, runConfigSetCommand } from './config';
+import { hydrateEnvFromConfig, runConfigClearCommand, runConfigListCommand, runConfigSetCommand } from './config';
 
 // Fills process.env from ~/.sleuth/config.json for any key nothing has
 // exported — must run before any command action so analyze/ask see it.
@@ -35,5 +35,10 @@ configCommand
   .action(runConfigSetCommand);
 
 configCommand.command('list').description('List which keys are configured (values masked)').action(runConfigListCommand);
+
+configCommand
+  .command('clear')
+  .description('Clear all saved API keys and configuration from ~/.sleuth/config.json')
+  .action(runConfigClearCommand);
 
 program.parseAsync(process.argv);
