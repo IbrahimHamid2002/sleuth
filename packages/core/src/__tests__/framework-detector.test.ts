@@ -97,7 +97,9 @@ describe('detectFrameworks', () => {
       frameworks: [],
       packageManager: 'npm',
       isMonorepo: false,
+      monorepoType: 'none',
       workspaceDirs: [],
+      subProjects: [],
     });
   });
 
@@ -107,6 +109,59 @@ describe('detectFrameworks', () => {
     const profile = detectFrameworks(repoRoot);
 
     expect(profile.frameworks).toEqual([]);
+    expect(profile.isMonorepo).toBe(false);
+  });
+
+  it('detects an ad-hoc multi-package repo via generically-named sub-folders (client/server)', () => {
+    mkdirSync(join(repoRoot, 'server'), { recursive: true });
+    mkdirSync(join(repoRoot, 'client'), { recursive: true });
+    writeFileSync(join(repoRoot, 'server', 'package.json'), JSON.stringify({ dependencies: { express: '^4.0.0' } }));
+    writeFileSync(
+      join(repoRoot, 'client', 'package.json'),
+      JSON.stringify({ dependencies: { react: '^18.0.0', vite: '^5.0.0' } }),
+    );
+
+    const profile = detectFrameworks(repoRoot);
+
+    expect([...profile.frameworks].sort()).toEqual(['express', 'react', 'vite']);
+    expect(profile.isMonorepo).toBe(true);
+    expect(profile.monorepoType).toBe('ad-hoc');
+    expect([...profile.workspaceDirs].sort()).toEqual(['client', 'server']);
+    expect(profile.subProjects).toHaveLength(2);
+
+    const serverProject = profile.subProjects.find((subProject) => subProject.rootRelativePath === 'server');
+    const clientProject = profile.subProjects.find((subProject) => subProject.rootRelativePath === 'client');
+
+    expect(serverProject?.frameworks).toEqual(['express']);
+    expect(serverProject?.entryPoints).toEqual([]);
+    expect(clientProject?.frameworks).toEqual(['react', 'vite']);
+    expect(clientProject?.entryPoints).toEqual([]);
+  });
+
+  it('treats a single root-level package.json (no nested ones) as monorepoType none, matching prior single-project behavior', () => {
+    writePackageJson(repoRoot, { dependencies: { express: '^4.0.0' } });
+
+    const profile = detectFrameworks(repoRoot);
+
+    expect(profile.monorepoType).toBe('none');
+    expect(profile.isMonorepo).toBe(false);
+    expect(profile.subProjects).toHaveLength(1);
+    expect(profile.subProjects[0]).toEqual({
+      rootRelativePath: '',
+      frameworks: ['express'],
+      packageManager: 'npm',
+      entryPoints: [],
+    });
+  });
+
+  it('handles zero package.json anywhere (root or nested) without throwing', () => {
+    mkdirSync(join(repoRoot, 'empty-dir'), { recursive: true });
+
+    const profile = detectFrameworks(repoRoot);
+
+    expect(profile.frameworks).toEqual([]);
+    expect(profile.subProjects).toEqual([]);
+    expect(profile.monorepoType).toBe('none');
     expect(profile.isMonorepo).toBe(false);
   });
 });

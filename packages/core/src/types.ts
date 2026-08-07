@@ -5,6 +5,22 @@ export interface RepoInput {
   pat?: string; // never persisted beyond request scope
 }
 
+export interface SubProjectProfile {
+  rootRelativePath: string;
+  frameworks: string[];
+  packageManager: 'npm' | 'yarn' | 'pnpm';
+  entryPoints: string[];
+}
+
+export interface FrameworkProfile {
+  frameworks: string[];
+  packageManager: 'npm' | 'yarn' | 'pnpm';
+  isMonorepo: boolean;
+  monorepoType: 'workspace' | 'ad-hoc' | 'none';
+  workspaceDirs: string[];
+  subProjects: SubProjectProfile[];
+}
+
 export interface RepoMeta {
   name: string;
   identifier: string;
@@ -12,8 +28,10 @@ export interface RepoMeta {
   rootPath: string;
   frameworks: string[];
   isMonorepo: boolean;
+  monorepoType: 'workspace' | 'ad-hoc' | 'none';
   workspaceDirs: string[];
   packageManager: 'npm' | 'yarn' | 'pnpm';
+  subProjects: SubProjectProfile[];
 }
 
 export interface FileNode {
