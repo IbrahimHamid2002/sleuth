@@ -3544,3 +3544,284 @@ Please make isolated, atomic commits for each logical step along the way.
 **Handling note (added by Claude Code, not part of the original user prompt):** the user's message opened with "DO NOT LOG THIS PROMPT," which conflicts with CLAUDE.md §4.5's mandatory logging rule. Per user decision when flagged, this entry is logged with the task text verbatim and only the 5 raw key values redacted, consistent with this repo's existing PAT/secret-redaction philosophy (§4.4).
 
 ---
+
+## CLI npm publish packaging (sleuth-cli bundle)
+
+### Goal
+Package @sleuth/cli as a standalone, publishable, unscoped npm package ("sleuth-cli") with @sleuth/core's compiled source bundled directly into its dist output via esbuild, so it installs and runs with zero workspace dependency — without modifying @sleuth/api's deployment path.
+
+### User Prompt
+Read SESSION_SUMMARY.md first.
+Then,
+Read CLAUDE.md Sections 1, 2, 3, 4, and 5 in full. Read ARCHITECTURE.md
+Section 2 (dependency rule) and Section 3 (directory tree). Read PRD.md
+Section 4.8 (CLI functional requirements). Do NOT deviate from these.
+
+CONTEXT AND DECISION (already made — do not re-litigate):
+@sleuth/core will NOT be published to npm as its own package. Per
+CLAUDE.md, core is a pure internal engine meant to be imported, not
+run independently, and is not designed as a public API for external
+consumers. Instead, @sleuth/cli will ship as a single, self-contained,
+UNSCOPED npm package with @sleuth/core's compiled output bundled
+directly into its dist output at build time. @sleuth/api's deployment
+is unaffected by this change and must not be modified in this task —
+it continues to resolve @sleuth/core via the npm workspace symlink at
+its own deploy time.
+
+This task touches only the approved target files below. Do not stop
+because this list already includes more than three files — it is a
+pre-approved scope for this specific packaging task. If you find you
+need to touch any file outside this list (excluding package-lock.json),
+STOP and explain why before proceeding.
+
+Approved target files:
+- packages/cli/package.json
+- packages/cli/scripts/build.mjs
+- packages/cli/README.md
+- packages/cli/tsconfig.json (only if the build step requires an
+  adjusted outDir/rootDir — do not restructure unrelated compiler
+  options)
+- package-lock.json, if dependency installation updates it
+- prompts.md
+
+STEP 1 — RENAME THE PACKAGE (unscoped):
+Change the "name" field in packages/cli/package.json from "@sleuth/cli"
+to "sleuth-cli" (verify this name is not already taken on the public
+npm registry before finalizing — if it is taken, choose the closest
+available alternative such as "sleuth-code-detective" or
+"sleuth-devtool" and clearly report which name was actually used and
+why). Set "private" to false (or remove the field entirely — removing
+is preferred for clarity). Keep the "bin" field pointing "sleuth" to
+"dist/index.js" with its existing shebang intact — verify the compiled
+dist/index.js still starts with `#!/usr/bin/env node` after the new
+build step is added.
+
+STEP 2 — AUDIT AND MERGE RUNTIME DEPENDENCIES:
+Before configuring the bundler, read packages/core/package.json's
+"dependencies" field in full. Any package listed there that is a
+runtime dependency (not a devDependency, not a type-only package) MUST
+be added to packages/cli/package.json's own "dependencies" — because
+once core's source is bundled into cli's dist, core's own package.json
+is never installed by end users; only cli's package.json controls what
+gets installed alongside the published tool.
+
+Pay special attention to:
+- better-sqlite3 — a native/binary module. It CANNOT be bundled by
+  esbuild. It MUST be marked external in the bundler config (see
+  Step 3) and MUST appear as a real "dependency" in
+  packages/cli/package.json with the same version range core uses, so
+  npm installs and rebuilds its native binding correctly for the
+  end user's platform when they run `npm install -g sleuth-cli`.
+- simple-git — a pure JS dependency but still must be present in
+  cli's own dependencies for the same reason (do not assume it's safe
+  to bundle just because it's not native; only mark it external if it
+  has its own runtime-loaded assets/binaries — verify by checking its
+  package contents; if it is safely bundleable, bundle it; if unsure,
+  mark it external and add as a real dependency to be safe).
+- zod, and any LLM provider SDK packages core uses (check core's
+  actual package.json for the exact list — do not guess).
+- Any other runtime dependency found in core's package.json that isn't
+  already a dependency of cli.
+
+Do not merge core's devDependencies. Do not merge cli's own existing
+dependencies twice.
+
+STEP 3 — BUNDLE CORE INTO CLI VIA ESBUILD:
+Add esbuild as a devDependency to packages/cli/package.json (verify
+it is not already present in the workspace; if some other package
+already has it, still add it explicitly to cli since it must build
+independently). This is a lightweight, single-purpose build tool, not
+a heavyweight alternative to anything already planned — permitted
+under CLAUDE.md rule 7.
+
+Create packages/cli/scripts/build.mjs, a Node ESM build script using
+esbuild's JavaScript API that:
+- Bundles packages/cli/src/index.ts as the entry point.
+- Sets platform: 'node', target appropriate for Node.js 20+, format:
+  'cjs' or 'esm' — pick whichever matches how packages/cli/src/index.ts
+  currently expects to run (check existing tsconfig.json module
+  settings before choosing; do not silently change the module system
+  cli currently relies on without reporting it).
+- Bundles @sleuth/core's TypeScript source directly (since it's a
+  workspace package, esbuild can resolve and inline it like any other
+  local import — no special config needed beyond normal bundling,
+  since workspace symlinks make it resolvable at build time on your
+  own machine).
+- Marks the following as external (never bundled, always resolved via
+  real node_modules at install time): better-sqlite3, and any other
+  native or unsafe-to-bundle dependency identified in Step 2.
+- Outputs to packages/cli/dist/index.js.
+- Preserves or re-adds the `#!/usr/bin/env node` shebang line at the
+  top of the output file (esbuild's banner option can inject this —
+  use it rather than manually prepending after the fact).
+- Minification is optional but preferred for a smaller published
+  package; do not enable source maps in the published output (keep
+  dist clean and minimal).
+
+Update packages/cli/package.json's "scripts" to add a "build" script
+that runs `node scripts/build.mjs` (or equivalent), and ensure this is
+what actually gets used before publishing — do not leave the existing
+plain `tsc` compilation as the only build path if it doesn't produce a
+bundled, dependency-safe output.
+
+Add a "files" field to packages/cli/package.json:
+"files": ["dist"]
+This ensures only the build output ships to npm — source .ts files,
+scripts/, and node_modules are excluded automatically (npm always
+includes package.json, README.md, and LICENSE regardless of this
+field, so they don't need to be listed).
+
+STEP 4 — VERIFY THE BUNDLE IS SELF-CONTAINED:
+After running the new build script, run `npm pack --dry-run` inside
+packages/cli and inspect the reported file list — confirm it includes
+only dist/, package.json, and README.md (and LICENSE if present), and
+does NOT include any packages/core source files as loose .ts files
+(they should be inlined into dist/index.js, not shipped separately).
+
+Then simulate a clean-install scenario: in a scratch temporary
+directory outside the monorepo, run `npm install <path-to-packed-tarball-or-packages/cli>`
+and execute the installed `sleuth` binary's `--help` output (or
+equivalent smoke command) to confirm it runs without any
+"Cannot find module '@sleuth/core'" or similar resolution error. Report
+the exact command(s) used and their output.
+
+STEP 5 — WRITE A COMPLETE, PUBLISH-READY README:
+Write packages/cli/README.md from scratch (this is the file npm
+displays on the public package page once published, so it must stand
+entirely on its own for someone who has never seen this repository).
+Do not reference internal-only files like ARCHITECTURE.md or CLAUDE.md
+by path since those won't exist in the published package — instead,
+link to the project's public GitHub repository URL for anyone wanting
+deeper technical detail (use a placeholder GitHub URL if the real one
+isn't confirmed yet, and clearly mark it as a placeholder in your
+report-back).
+
+The README must include, in this order, with proper Markdown headings:
+
+1. Title + one-line tagline ("Sleuth — The Autonomous Codebase
+   Detective") and a short 2-3 sentence description of what the tool
+   does, matching PRD.md Section 1's Core Objective.
+
+2. Badges (optional but nice): npm version, license, Node version
+   requirement — only include ones that will actually resolve
+   correctly once published; do not add a badge pointing at a CI
+   pipeline that doesn't exist.
+
+3. "Installation" section:
+   - `npm install -g sleuth-cli` (or whatever final package name was
+     used in Step 1)
+   - Node.js 20+ requirement stated explicitly.
+
+4. "Quick Start" section:
+   - `sleuth analyze <github-url-or-local-path>` example
+   - `sleuth ask "How does authentication work?"` example
+   - Expected output description (3 Markdown files generated in the
+     current working directory).
+
+5. "Commands" section — document every real CLI command and flag as
+   actually implemented (verify against the real
+   packages/cli/src/index.ts, analyze.ts, ask.ts, config.ts — do not
+   invent flags that don't exist, and do not omit flags that do exist):
+   - `sleuth analyze <target> [--token PAT] [--max-files N] [--output DIR]`
+     with a description of each flag
+   - `sleuth ask [question]` — resumes last session or starts REPL,
+     explain exit words (exit/quit/bye/goodbye)
+   - `sleuth config` — explain what it stores and where, and
+     explicitly state that API keys are stored locally and never
+     transmitted anywhere except directly to the LLM provider APIs
+
+6. "How It Works" section (architecture overview, written for an
+   external audience, not an internal contributor):
+   - Briefly explain the deterministic analysis pipeline: ingestion →
+     framework detection → file discovery → priority scoring → import
+     graph → LLM summarization → documentation synthesis
+   - Briefly explain the Deep Dive agent: a ReAct-style loop
+     (Plan → Reason → Act via tools → Observe → Reflect → Synthesize)
+     with its 5 tools (read_file, search_code, list_directory,
+     get_file_summary, find_references) and its hard bounds (max 10
+     iterations, 60-second timeout)
+   - Note that this section is a simplified summary and link to the
+     GitHub repository's ARCHITECTURE.md for the full technical
+     specification.
+
+7. "AI / LLM Usage" section (dedicated, since the user specifically
+   requested AI feature documentation):
+   - List the LLM providers used and their role: Groq (primary),
+     OpenRouter (secondary fallback), Google Gemini (final fallback
+     for the documentation pipeline only — confirm the Deep Dive
+     agent's chain is Groq → OpenRouter only, no Gemini, per PRD
+     Section 4.7, and document this distinction clearly and correctly)
+   - State plainly that all providers used are on free tiers, and that
+     users need their own free API keys (link to where users can
+     obtain Groq/OpenRouter/Gemini API keys)
+   - Explain how a user configures their own API keys (`sleuth config`
+     command, or environment variables — check the real
+     implementation and document whichever mechanism actually exists)
+   - Explicitly state privacy/security guarantees relevant to an
+     external user: PATs are never logged/stored/sent to any LLM,
+     no repository content is permanently stored, all processing is
+     local, temporary clones are deleted after use
+
+8. "Limitations" section — adapt directly from ARCHITECTURE.md
+   Section 8's documented MVP limitations table (regex-based analysis
+   not full AST, path aliases unresolved, single-process only, etc.),
+   rewritten in plain language for an external audience.
+
+9. "Security" section — summarize PRD.md Section 5's relevant points
+   for an external CLI user: ephemeral sandboxes, PAT handling,
+   local-only processing, no telemetry/tracking (confirm no telemetry
+   exists in the real implementation before stating this — do not
+   claim it if it isn't true).
+
+10. "Contributing" section — brief, pointing to the GitHub repository
+    for issues/PRs, noting the project's AI-assisted development
+    workflow if you judge that relevant to mention, otherwise keep
+    this section minimal.
+
+Use clear, concise, professional language throughout — no filler, no
+unverified marketing claims (e.g., do not claim speed/accuracy numbers
+that aren't actually measured in PRD.md Section 6's success metrics
+table; if citing a number, cite exactly what PRD.md states).
+
+STEP 6 — FINAL PRE-PUBLISH CHECKLIST (report only, do not execute
+`npm publish` yourself):
+Compile and report a checklist covering:
+- [ ] Final package name confirmed available on the registry
+- [ ] "private" removed/false
+- [ ] "files": ["dist"] present
+- [ ] All of core's runtime dependencies merged into cli's dependencies
+- [ ] better-sqlite3 (and any other native dep) marked external in the
+      esbuild config AND present as a real dependency
+- [ ] Build produces a working, self-contained dist/index.js verified
+      via the Step 4 clean-install simulation
+- [ ] README.md complete and accurate
+- [ ] Reminder that actual publish requires: `npm login` then
+      `cd packages/cli && npm publish` (no --access public flag needed
+      since the package is unscoped and public by default)
+
+Do not run `npm publish` as part of this task — that is a manual,
+human-triggered final step outside this task's scope.
+
+VALIDATION:
+- Run the new build script and confirm it completes without error.
+- Run the auto-lint skill (per CLAUDE.md rule 6) scoped to
+  packages/cli, and resolve any remaining errors manually.
+- Do not leave lint, type-check, or build errors unresolved.
+
+Append this complete prompt verbatim to prompts.md using the exact
+format required by CLAUDE.md rule 5.
+
+REPORT BACK:
+- Final chosen package name (and why, if the original was unavailable)
+- Full list of dependencies merged from core into cli, with versions
+- Confirmation of the native-dependency handling for better-sqlite3
+- Build script contents summary and where dist/index.js ends up
+- Results of the Step 4 clean-install simulation (exact commands and
+  output)
+- The complete pre-publish checklist from Step 6
+- Any gaps found (e.g., unconfirmed GitHub URL,
+  unconfirmed npm package name availability) that require a human
+  decision before actually running npm publish
+- Any deviations from this specification and why
+
+---
