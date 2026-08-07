@@ -2670,3 +2670,240 @@ names), any assets that were missing and how you handled the fallback,
 manual verification notes, any deviations from spec and why.
 
 ---
+
+## Web Redux Toolkit / RTK Query data foundation
+
+### Goal
+
+Implement the Redux Toolkit + RTK Query server-state layer for `@sleuth/web` (store, typed API client with Zod-validated responses matching the real Task 18 Express contract, and a polling `useAnalysis` hook), without touching pages/routing.
+
+### User Prompt
+
+Read SESSION_SUMMARY.md first. 
+Then,
+Read CLAUDE.md Sections 1, 2, 3, 4, and 5 in full. Read PRD.md
+Section 4.9. Read ARCHITECTURE.md Sections 2 and 3, especially the
+@sleuth/web dependency boundary. Do NOT deviate from these.
+
+Prerequisites:
+- Task 18 Express API must already be implemented.
+- Task 19A design-system foundation must already be implemented.
+- Preserve Task 19A's ThemeProvider, Navbar, shadcn Toaster, theme
+  persistence, brand colors, logos, favicons, Orbitron font, Magic UI,
+  AnimateIcons, and motion/react setup.
+
+This iteration intentionally touches the approved target files listed
+below. Do not stop because this approved list contains more than three
+files. If implementation requires touching any additional file other
+than package-lock.json or prompts.md, STOP and explain why before
+proceeding.
+
+Approved target files:
+- packages/web/package.json
+- packages/web/src/store.ts
+- packages/web/src/api.ts
+- packages/web/src/hooks/useAnalysis.ts
+- packages/web/src/main.tsx
+- package-lock.json, if dependency installation updates it
+- prompts.md
+
+GOAL:
+Implement only the Redux Toolkit and RTK Query data foundation. Do not
+implement or redesign the application pages in this iteration. Routing
+and pages will be implemented in Task 19B-2.
+
+TECH STACK:
+- React 18
+- TypeScript strict mode
+- Redux Toolkit
+- RTK Query
+- react-redux
+- react-router-dom
+- Zod for validating external API responses
+
+Add the following packages to packages/web if they are not already
+installed:
+- @reduxjs/toolkit
+- react-redux
+- react-router-dom
+- zod
+
+Do not reinstall or replace dependencies already configured by
+Task 19A. Do not add Axios or another data-fetching/state library.
+
+Before defining frontend response types, inspect the actual Task 18 API
+implementation and its exported/inferred response structures. Match the
+real API contract rather than inventing incompatible field names.
+
+SERVER-STATE RULE:
+All server data, including run creation, status, results, sessions, and
+investigations, must be managed through RTK Query. Do not implement
+ad-hoc fetch calls, useEffect-based fetchers, custom polling utilities,
+setInterval polling, Axios calls, or duplicate server state in ordinary
+Redux slices.
+
+Local React state remains permitted later for ephemeral UI-only values
+such as an input value, selected tab, dialog visibility, or expanded
+section. It must not duplicate RTK Query server data.
+
+API BASE URL:
+Use fetchBaseQuery. Treat import.meta.env.VITE_API_URL as the complete
+API base URL, including `/api`, for example:
+
+VITE_API_URL=http://localhost:3000/api
+
+Use `/api` as the safe same-origin fallback when VITE_API_URL is absent.
+Avoid producing a duplicated `/api/api` path. Give the resolved value a
+self-explanatory name such as `sleuthApiBaseUrl`.
+
+IMPLEMENT packages/web/src/api.ts:
+Create a single RTK Query API using createApi and fetchBaseQuery.
+
+Define strictly typed endpoints for:
+- analyzeRepo:
+  POST /analyze
+  Argument: { url: string; pat?: string }
+  Response: { runId: string }
+
+- getRunStatus:
+  GET /runs/:runId/status
+  Match the actual API status and progress contract from Task 18.
+
+- getRunResults:
+  GET /runs/:runId/results
+  Match the actual Task 18 results response, including repo metadata,
+  synthesis, summaries, auditLog, and durationMs.
+
+- startSession:
+  POST /sessions/start
+  Body: { runId: string }
+  Response: { sessionId: string }
+
+- askQuestion:
+  POST /sessions/:sessionId/ask
+  Body: { question: string }
+  Response: { investigationId: string }
+
+- endSession:
+  POST /sessions/:sessionId/end
+  Response: { success: true }
+
+Validate external API responses with Zod before exposing them to UI
+code. Use transformResponse or an equivalent RTK Query-compatible
+validation path. If a response fails validation, surface a descriptive
+error instead of silently accepting malformed data.
+
+Export these generated hooks:
+- useAnalyzeRepoMutation
+- useGetRunStatusQuery
+- useGetRunResultsQuery
+- useLazyGetRunResultsQuery
+- useStartSessionMutation
+- useAskQuestionMutation
+- useEndSessionMutation
+
+Implement and export a plain `downloadResults(runId: string): void`
+browser helper:
+- Point a temporary hidden anchor to
+  GET /api/runs/:runId/download using the same resolved API base URL.
+- Trigger the browser download.
+- Remove the temporary anchor afterward.
+- Do not implement this as an RTK Query endpoint because the browser
+  should stream/download the ZIP directly.
+
+PAT SECURITY:
+- The PAT may only be sent as part of the analyze mutation request.
+- Never log it.
+- Never put it in query parameters.
+- Never persist it to localStorage or sessionStorage.
+- Do not configure Redux persistence.
+- Do not use it as a cache key.
+- Do not copy it into another Redux slice.
+- Task 19B-2 will clear both component state and mutation state in a
+  finally block immediately after the request settles.
+
+IMPLEMENT packages/web/src/store.ts:
+- Configure the Redux store.
+- Register the RTK Query API reducer under its reducerPath.
+- Add the RTK Query middleware.
+- Export self-explanatory `RootState` and `AppDispatch` types.
+- Do not add an ordinary Redux slice unless there is a demonstrated
+  non-server-state requirement. No such slice is expected here.
+
+UPDATE packages/web/src/main.tsx:
+- Add react-redux's Provider around the application.
+- Preserve the existing ThemeProvider and global shadcn Toaster from
+  Task 19A.
+- Ensure ThemeProvider remains above routed page content so theme
+  state persists across navigation.
+- Do not remove or duplicate the Navbar.
+- Do not implement the five final routes in this iteration unless a
+  minimal temporary route is required to keep the application compiling.
+  Task 19B-2 owns final routing and pages.
+
+IMPLEMENT packages/web/src/hooks/useAnalysis.ts:
+Create a thin, strictly typed hook that composes RTK Query hooks and
+exposes:
+
+{
+  status,
+  progress,
+  results,
+  error,
+  isLoading,
+  startAnalysis
+}
+
+Requirements:
+- Accept an optional runId.
+- Skip status and results queries when runId is missing.
+- Poll run status every 2000ms using RTK Query's `pollingInterval`
+  hook option only.
+- Never use setInterval.
+- Never use a custom polling utility.
+- Stop polling after status becomes `complete` or `error`.
+- Fetch results only after status becomes `complete`.
+- If using useLazyGetRunResultsQuery, triggering it from a small effect
+  is allowed because the network operation still belongs entirely to
+  RTK Query. Prevent repeated result triggers for the same completed
+  run.
+- Alternatively, a declarative useGetRunResultsQuery with `skip` is
+  acceptable, provided the required generated lazy hook remains
+  exported from api.ts.
+- Combine RTK Query errors into one clearly typed error value.
+- Do not duplicate status or results in useState.
+
+NAMING:
+Every variable, function, type, and prop name must be self-explanatory.
+Do not use vague names such as `data`, `val`, `temp`, `obj`, `thing`,
+or single-letter names except for conventional trivial callback
+parameters where unavoidable. Prefer names such as:
+- repositoryAnalysisStatus
+- pipelineProgress
+- completedRunResults
+- shouldPollRunStatus
+- triggerResultsRequest
+
+VALIDATION:
+- Run the package TypeScript check.
+- Run the package build.
+- Invoke the auto-lint skill after modifying files, scoped to
+  packages/web.
+- Then run the repository's web lint command with --fix if required by
+  the skill/workflow.
+- Resolve every remaining lint or type error manually.
+- Do not leave warnings caused by this iteration unresolved.
+
+Append this complete user prompt verbatim to prompts.md using the exact
+format required by CLAUDE.md rule 5.
+
+REPORT BACK:
+- Files changed
+- Dependencies added
+- RTK Query endpoints and hooks added
+- API base URL behavior
+- Zod validation added
+- Type-check/build/lint results
+- Any deviation from the requested specification and the reason
+
+---
