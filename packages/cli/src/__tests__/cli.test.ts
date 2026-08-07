@@ -8,7 +8,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { getSessionFile, runAnalyzeCommand } from '../analyze';
 import { runAskCommand } from '../ask';
-import { getConfigFile, hydrateEnvFromConfig, readConfig, runConfigListCommand, runConfigSetCommand } from '../config';
+import {
+  getConfigFile,
+  hydrateEnvFromConfig,
+  readConfig,
+  runConfigClearCommand,
+  runConfigListCommand,
+  runConfigSetCommand,
+} from '../config';
 
 vi.mock('ora', () => {
   const spinner = {
@@ -575,6 +582,28 @@ describe('config', () => {
     delete process.env.OPENROUTER_API_KEY;
     rmSync(outputDir, { recursive: true, force: true });
     rmSync(sandboxPath, { recursive: true, force: true });
+  });
+
+  it('runConfigClearCommand deletes an existing config file and reports success', () => {
+    runConfigSetCommand('GROQ_SUMMARIZER_API_KEY', 'gsk_abcdefghijklmnop');
+    expect(existsSync(getConfigFile())).toBe(true);
+
+    runConfigClearCommand();
+
+    expect(existsSync(getConfigFile())).toBe(false);
+    expect(readConfig()).toEqual({});
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('All saved configurations have been cleared.'));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it('runConfigClearCommand succeeds gracefully when no config file exists', () => {
+    expect(existsSync(getConfigFile())).toBe(false);
+
+    runConfigClearCommand();
+
+    expect(exitSpy).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('All saved configurations have been cleared.'));
   });
 
   it('clears the spinner before a console.warn fired mid-pipeline, and restores console.warn afterward', async () => {
