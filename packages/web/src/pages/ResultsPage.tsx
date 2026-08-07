@@ -7,7 +7,7 @@ import remarkGfm from 'remark-gfm';
 import type { AuditEntry, RepoMeta } from '@/api';
 import { downloadResults } from '@/api';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardDescription, CardHeader } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -18,6 +18,16 @@ import { cn } from '@/lib/utils';
 import 'highlight.js/styles/github-dark.css';
 
 type SelectedDocumentationTab = 'readme' | 'architecture' | 'onboarding' | 'deep-dive';
+
+// These Card titles are the only heading on their respective page state, so
+// they're rendered as real headings instead of the shadcn CardTitle div.
+function ResultsPageHeading({ children }: { children: string }): React.JSX.Element {
+  return <h1 className="font-semibold leading-none tracking-tight">{children}</h1>;
+}
+
+function ResultsSectionHeading({ children }: { children: string }): React.JSX.Element {
+  return <h2 className="font-semibold leading-none tracking-tight">{children}</h2>;
+}
 
 function EmptyState({
   title,
@@ -31,10 +41,13 @@ function EmptyState({
   linkLabel: string;
 }): React.JSX.Element {
   return (
-    <div className="container flex justify-center py-16">
-      <Card className="w-full max-w-lg">
+    <div id="main-content" tabIndex={-1} className="container flex justify-center py-16">
+      {/* min-w-0 overrides the flex item's default min-width:auto, which
+         otherwise refuses to shrink below the card's content width and
+         pushes the card (and page) past narrow viewports. */}
+      <Card className="w-full min-w-0 max-w-lg">
         <CardHeader>
-          <CardTitle>{title}</CardTitle>
+          <ResultsPageHeading>{title}</ResultsPageHeading>
         </CardHeader>
         <CardContent className="flex flex-col gap-4 text-sm text-muted-foreground">
           <p role="alert">{description}</p>
@@ -49,7 +62,10 @@ function EmptyState({
 
 function ResultsLoadingSkeleton(): React.JSX.Element {
   return (
-    <div className="container flex flex-col gap-4 py-10">
+    <div id="main-content" tabIndex={-1} className="container flex flex-col gap-4 py-10">
+      <span role="status" className="sr-only">
+        Loading analysis results…
+      </span>
       <Skeleton className="h-9 w-64" />
       <Skeleton className="h-6 w-96" />
       <Skeleton className="h-64 w-full" />
@@ -103,7 +119,29 @@ function MermaidDiagram({ chart }: { chart: string }): React.JSX.Element {
     );
   }
 
-  return <div ref={containerRef} className="my-4 flex justify-center overflow-x-auto" />;
+  return (
+    <div className="my-4">
+      {/* role="img" flattens the injected SVG's internal markup into a single
+         accessible-tree node so assistive tech doesn't read every path/text
+         element individually; the raw source below is the text alternative. */}
+      <div
+        ref={containerRef}
+        role="img"
+        aria-label="Repository architecture diagram, rendered from Mermaid source"
+        className="flex justify-center overflow-x-auto"
+      />
+      {/* Renders directly on the page background inside a TabsContent panel
+         (no Card wrapper here), where --muted-foreground fails AA contrast. */}
+      <details className="mt-2 text-xs text-gray-600 dark:text-gray-300">
+        <summary className="cursor-pointer select-none underline-offset-4 hover:underline">
+          View diagram source
+        </summary>
+        <pre className="mt-2 overflow-x-auto rounded-md border p-3">
+          <code>{chart}</code>
+        </pre>
+      </details>
+    </div>
+  );
 }
 
 function DocumentMarkdown({
@@ -114,20 +152,29 @@ function DocumentMarkdown({
   enableMermaidDiagrams?: boolean;
 }): React.JSX.Element {
   const markdownComponents: Components = {
-    h1: ({ children }) => <h1 className="mt-8 text-2xl font-bold tracking-tight first:mt-0 sm:text-3xl">{children}</h1>,
-    h2: ({ children }) => <h2 className="mt-6 text-xl font-semibold tracking-tight sm:text-2xl">{children}</h2>,
-    h3: ({ children }) => <h3 className="mt-5 text-lg font-semibold sm:text-xl">{children}</h3>,
-    h4: ({ children }) => <h4 className="mt-4 text-base font-semibold">{children}</h4>,
+    // Demoted one level from the raw Markdown (h1 -> h2, etc.): the page
+    // itself already renders a real <h1> with the repository name, so
+    // reflecting the document's own top-level heading as another <h1> would
+    // put two on the page and break the single-h1 rule.
+    h1: ({ children }) => <h2 className="mt-8 text-2xl font-bold tracking-tight first:mt-0 sm:text-3xl">{children}</h2>,
+    h2: ({ children }) => <h3 className="mt-6 text-xl font-semibold tracking-tight sm:text-2xl">{children}</h3>,
+    h3: ({ children }) => <h4 className="mt-5 text-lg font-semibold sm:text-xl">{children}</h4>,
+    h4: ({ children }) => <h5 className="mt-4 text-base font-semibold">{children}</h5>,
     p: ({ children }) => <p className="my-3 text-sm leading-relaxed sm:text-base">{children}</p>,
     a: ({ href, children }) => (
       <a href={href} target="_blank" rel="noopener noreferrer" className="underline underline-offset-4 hover:text-primary">
         {children}
+        <span className="sr-only"> (opens in a new tab)</span>
       </a>
     ),
     ul: ({ children }) => <ul className="my-3 list-disc space-y-1 pl-6 text-sm sm:text-base">{children}</ul>,
     ol: ({ children }) => <ol className="my-3 list-decimal space-y-1 pl-6 text-sm sm:text-base">{children}</ol>,
+    // Markdown content renders directly on the page background (no Card
+    // wrapper inside these tab panels), where --muted-foreground fails AA
+    // contrast — overridden with a pair verified compliant against both
+    // brand backgrounds.
     blockquote: ({ children }) => (
-      <blockquote className="my-3 border-l-2 border-border pl-4 text-sm italic text-muted-foreground">{children}</blockquote>
+      <blockquote className="my-3 border-l-2 border-border pl-4 text-sm italic text-gray-600 dark:text-gray-300">{children}</blockquote>
     ),
     hr: () => <hr className="my-6 border-border" />,
     strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
@@ -209,7 +256,7 @@ function RepositoryMetadataCard({ meta, filesSummarizedCount, durationMs }: { me
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Repository</CardTitle>
+        <ResultsSectionHeading>Repository</ResultsSectionHeading>
       </CardHeader>
       <CardContent>
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1.5 text-sm">
@@ -239,7 +286,7 @@ function DetectedFrameworksCard({ frameworks }: { frameworks: string[] }): React
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Detected frameworks</CardTitle>
+        <ResultsSectionHeading>Detected frameworks</ResultsSectionHeading>
       </CardHeader>
       <CardContent>
         {frameworks.length === 0 ? (
@@ -266,7 +313,7 @@ function AuditLogCard({ repositoryAuditEntries }: { repositoryAuditEntries: Audi
     <Card>
       <Collapsible open={isAuditLogExpanded} onOpenChange={setIsAuditLogExpanded}>
         <CardHeader className="flex flex-row items-center justify-between gap-2 space-y-0">
-          <CardTitle>Audit log</CardTitle>
+          <ResultsSectionHeading>Audit log</ResultsSectionHeading>
           <CollapsibleTrigger asChild>
             <Button
               type="button"
@@ -274,6 +321,7 @@ function AuditLogCard({ repositoryAuditEntries }: { repositoryAuditEntries: Audi
               size="sm"
               aria-expanded={isAuditLogExpanded}
               aria-controls={auditLogContentId}
+              aria-label={`${repositoryAuditEntries.length} entries, ${isAuditLogExpanded ? 'expanded' : 'collapsed'} audit log`}
             >
               {repositoryAuditEntries.length} entries
             </Button>
@@ -283,10 +331,10 @@ function AuditLogCard({ repositoryAuditEntries }: { repositoryAuditEntries: Audi
           <CardContent className="flex max-h-64 flex-col gap-2 overflow-y-auto text-xs">
             {repositoryAuditEntries.map((entry, index) => (
               <div key={`${entry.timestamp}-${index}`} className="border-b border-border pb-1.5 last:border-0">
-                <p className="font-medium">
+                <p className="break-words font-medium">
                   {entry.stage} · {entry.action}
                 </p>
-                <p className="text-muted-foreground">{entry.detail}</p>
+                <p className="break-words text-muted-foreground">{entry.detail}</p>
               </div>
             ))}
           </CardContent>
@@ -358,11 +406,18 @@ export function ResultsPage(): React.JSX.Element {
   }
 
   return (
-    <div className="container grid grid-cols-1 gap-8 py-10 lg:grid-cols-[minmax(0,1fr)_320px]">
+    <div
+      id="main-content"
+      tabIndex={-1}
+      className="container grid grid-cols-1 gap-8 py-10 lg:grid-cols-[minmax(0,1fr)_320px]"
+    >
       <div className="flex min-w-0 flex-col gap-4">
         <header className="flex flex-col gap-1">
-          <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{meta.name}</h1>
-          <p className="text-sm text-muted-foreground">
+          <h1 className="break-words text-2xl font-bold tracking-tight sm:text-3xl">{meta.name}</h1>
+          {/* Sits directly on the page background (not a Card), where the
+             theme's --muted-foreground token fails AA contrast — overridden
+             with a pair verified compliant against both brand backgrounds. */}
+          <p className="break-words text-sm text-gray-600 dark:text-gray-300">
             {meta.identifier} · commit {meta.commitHash.slice(0, 7)}
           </p>
         </header>
@@ -371,12 +426,17 @@ export function ResultsPage(): React.JSX.Element {
           value={selectedDocumentationTab}
           onValueChange={(value) => setSelectedDocumentationTab(value as SelectedDocumentationTab)}
         >
-          <TabsList>
-            <TabsTrigger value="readme">README</TabsTrigger>
-            <TabsTrigger value="architecture">ARCHITECTURE</TabsTrigger>
-            <TabsTrigger value="onboarding">ONBOARDING</TabsTrigger>
-            <TabsTrigger value="deep-dive">Deep Dive</TabsTrigger>
-          </TabsList>
+          {/* Four triggers (one is a fairly long label) can exceed a 320px
+             viewport's width — scroll the tab strip itself rather than
+             letting it overflow the page. */}
+          <div className="overflow-x-auto">
+            <TabsList>
+              <TabsTrigger value="readme">README</TabsTrigger>
+              <TabsTrigger value="architecture">ARCHITECTURE</TabsTrigger>
+              <TabsTrigger value="onboarding">ONBOARDING</TabsTrigger>
+              <TabsTrigger value="deep-dive">Deep Dive</TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="readme" className="flex flex-col gap-4">
             <DocumentDownloadButton label="README" fileName="README.generated.md" markdown={synthesis.readme} />
@@ -396,7 +456,7 @@ export function ResultsPage(): React.JSX.Element {
           <TabsContent value="deep-dive">
             <Card>
               <CardHeader>
-                <CardTitle>Deep Dive</CardTitle>
+                <ResultsSectionHeading>Deep Dive</ResultsSectionHeading>
                 <CardDescription>Chat-based investigation is coming in Task 20.</CardDescription>
               </CardHeader>
               <CardContent className="text-sm text-muted-foreground">
@@ -414,7 +474,7 @@ export function ResultsPage(): React.JSX.Element {
 
         <Card>
           <CardHeader>
-            <CardTitle>Downloads</CardTitle>
+            <ResultsSectionHeading>Downloads</ResultsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-2">
             <DocumentDownloadButton label="README" fileName="README.generated.md" markdown={synthesis.readme} />

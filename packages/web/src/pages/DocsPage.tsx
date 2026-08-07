@@ -1,4 +1,11 @@
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
+
+// Card section titles are rendered as real <h2> elements (not the shadcn
+// CardTitle div) so the page has a sequential, screen-reader-navigable
+// heading outline instead of visually-styled non-headings.
+function DocsSectionHeading({ children }: { children: string }): React.JSX.Element {
+  return <h2 className="font-semibold leading-none tracking-tight">{children}</h2>;
+}
 
 interface DocsNavSection {
   anchorId: string;
@@ -28,9 +35,13 @@ function CodeBlock({ children }: { children: string }): React.JSX.Element {
 
 export function DocsPage(): React.JSX.Element {
   return (
-    <div className="container grid grid-cols-1 gap-8 py-12 lg:grid-cols-[220px_1fr]">
+    <div id="main-content" tabIndex={-1} className="container grid grid-cols-1 gap-8 py-12 lg:grid-cols-[220px_1fr]">
       <nav aria-label="Documentation sections" className="lg:sticky lg:top-20 lg:self-start">
-        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+        {/* Sits directly on the page background (not a Card), where the
+           theme's --muted-foreground token fails AA contrast — overridden
+           with a pair that's verified compliant against both brand
+           backgrounds instead. */}
+        <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-gray-600 dark:text-gray-300">
           On this page
         </h2>
         <ul className="flex flex-wrap gap-x-4 gap-y-2 text-sm lg:flex-col lg:gap-2">
@@ -38,7 +49,7 @@ export function DocsPage(): React.JSX.Element {
             <li key={section.anchorId}>
               <a
                 href={`#${section.anchorId}`}
-                className="text-muted-foreground underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className="text-gray-600 underline-offset-4 hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring dark:text-gray-300"
               >
                 {section.label}
               </a>
@@ -50,7 +61,7 @@ export function DocsPage(): React.JSX.Element {
       <div className="flex max-w-3xl flex-col gap-8">
         <header>
           <h1 className="text-3xl font-bold tracking-tight sm:text-4xl">Sleuth CLI Documentation</h1>
-          <p className="mt-2 text-muted-foreground">
+          <p className="mt-2 text-gray-600 dark:text-gray-300">
             The command-line interface is Sleuth&apos;s first-class way to analyze a repository —
             it runs fully locally with zero deployment dependency.
           </p>
@@ -58,7 +69,7 @@ export function DocsPage(): React.JSX.Element {
 
         <Card id="overview" className="scroll-mt-20">
           <CardHeader>
-            <CardTitle>What the Sleuth CLI does</CardTitle>
+            <DocsSectionHeading>What the Sleuth CLI does</DocsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
             <p>
@@ -74,7 +85,7 @@ export function DocsPage(): React.JSX.Element {
 
         <Card id="installation" className="scroll-mt-20">
           <CardHeader>
-            <CardTitle>Installation</CardTitle>
+            <DocsSectionHeading>Installation</DocsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
             <p>
@@ -100,7 +111,7 @@ npm link`}</CodeBlock>
 
         <Card id="workflow" className="scroll-mt-20">
           <CardHeader>
-            <CardTitle>CLI workflow</CardTitle>
+            <DocsSectionHeading>CLI workflow</DocsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
             <ol className="list-decimal space-y-2 pl-5">
@@ -123,7 +134,7 @@ npm link`}</CodeBlock>
 
         <Card id="analyze-command" className="scroll-mt-20">
           <CardHeader>
-            <CardTitle>sleuth analyze</CardTitle>
+            <DocsSectionHeading>sleuth analyze</DocsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
             <CodeBlock>{'sleuth analyze <target> [--token <pat>] [--max-files <n>] [--output <dir>] [--resume]'}</CodeBlock>
@@ -156,7 +167,7 @@ npm link`}</CodeBlock>
 
         <Card id="ask-command" className="scroll-mt-20">
           <CardHeader>
-            <CardTitle>sleuth ask</CardTitle>
+            <DocsSectionHeading>sleuth ask</DocsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
             <CodeBlock>{'sleuth ask [question]'}</CodeBlock>
@@ -178,7 +189,7 @@ npm link`}</CodeBlock>
 
         <Card id="config-command" className="scroll-mt-20">
           <CardHeader>
-            <CardTitle>sleuth config</CardTitle>
+            <DocsSectionHeading>sleuth config</DocsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
             <CodeBlock>{`sleuth config set <key> <value>
@@ -206,7 +217,7 @@ sleuth config list`}</CodeBlock>
 
         <Card id="repository-sources" className="scroll-mt-20">
           <CardHeader>
-            <CardTitle>Public GitHub, private GitHub, and local paths</CardTitle>
+            <DocsSectionHeading>Public GitHub, private GitHub, and local paths</DocsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
             <ul className="list-disc space-y-2 pl-5">
@@ -230,7 +241,7 @@ sleuth config list`}</CodeBlock>
 
         <Card id="pat-security" className="scroll-mt-20">
           <CardHeader>
-            <CardTitle>PAT security note</CardTitle>
+            <DocsSectionHeading>PAT security note</DocsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
             <p>
@@ -245,7 +256,7 @@ sleuth config list`}</CodeBlock>
 
         <Card id="generated-documents" className="scroll-mt-20">
           <CardHeader>
-            <CardTitle>The three generated documents</CardTitle>
+            <DocsSectionHeading>The three generated documents</DocsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
             <ul className="list-disc space-y-2 pl-5">
@@ -267,7 +278,7 @@ sleuth config list`}</CodeBlock>
 
         <Card id="deep-dive-sessions" className="scroll-mt-20">
           <CardHeader>
-            <CardTitle>Deep Dive sessions</CardTitle>
+            <DocsSectionHeading>Deep Dive sessions</DocsSectionHeading>
           </CardHeader>
           <CardContent className="flex flex-col gap-3 text-sm text-muted-foreground">
             <p>
