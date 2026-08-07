@@ -1643,3 +1643,69 @@ existing tests regress.
 Want me to fix the prompt-grounding bug now (agent never sees real file paths, so it hallucinates fake ones)?
 
 ---
+
+## Build packages/cli: analyze and ask commands
+
+### Goal
+Implement the CLI package (§4.8): `sleuth analyze <target>` runs the pipeline via a live ora spinner and writes the three generated docs plus a resumable `~/.sleuth/last-session.json`; `sleuth ask [question]` reconstructs a Deep Dive session from that file and either answers one question or runs an interactive inquirer REPL until an exit word terminates the session and cleans up the sandbox. Wire both into a commander entrypoint, and cover both commands with mocked-I/O/LLM vitest tests per the dry-run-before-wet-run rule.
+
+### User Prompt
+Firslty read SESSION_SUMMARY.md file.
+Then,
+Read PRD.md Section 4.8 in full.
+
+Add dependencies to packages/cli: commander, ora, chalk, inquirer.
+Add packages/cli dependency on the local @sleuth/core package.
+
+Implement packages/cli/src/analyze.ts:
+- export async function runAnalyzeCommand(target: string, opts: {
+  token?: string; maxFiles?: string; output?: string }): Promise<void>
+  Detect if target is a URL (matches github.com) or local path. Build a
+  RepoInput accordingly (include opts.token as pat if provided — never
+  log it, use redactSecrets defensively on any console output derived
+  from user input). Use ora to show a live spinner, updating its text via
+  the pipeline's onProgress callback with stage names. Call runPipeline.
+  On success: write readme/architecture/onboarding to opts.output ??
+  process.cwd() as README.generated.md, ARCHITECTURE.md, ONBOARDING.md.
+  Print a summary box (files analyzed, cache hit rate from auditLog,
+  duration). Persist { sandboxPath, repoMeta, summaries } as JSON to
+  ~/.sleuth/last-session.json (create dir if needed) so `sleuth ask` can
+  resume without re-cloning. Print: "💡 Run `sleuth ask` to continue
+  investigating this repo". On failure, print a clear red error via
+  chalk and exit(1) — ensure runPipeline's own internal cleanup already
+  handles sandbox deletion on failure.
+
+Implement packages/cli/src/ask.ts:
+- export async function runAskCommand(question?: string): Promise<void>
+  Load ~/.sleuth/last-session.json — if missing or its sandboxPath no
+  longer exists on disk, print an error instructing the user to run
+  `sleuth analyze` first, exit(1). Reconstruct a DeepDiveSession via
+  createSession using the loaded data. If `question` argument is provided,
+  call investigate() once, render the answer, then exit (session remains
+  on disk for further `sleuth ask` calls). If no question is provided,
+  enter an interactive loop using inquirer's input prompt: "🔍 Ask a
+  question (or 'exit'): ". Check the trimmed, lowercased input against
+  ['exit','quit','bye','goodbye'] — on match, call terminateSession(),
+  delete ~/.sleuth/last-session.json, print "👋 Session ended. Sandbox
+  cleaned up.", break the loop. Otherwise call investigate(), render the
+  reasoning trace (thought/tool/observation per step) and final answer
+  using chalk formatting, loop again.
+
+Implement packages/cli/src/index.ts:
+Wire up commander: program.command('analyze <target>').option('--token
+<pat>').option('--max-files <n>').option('--output <dir>').action
+(runAnalyzeCommand); program.command('ask [question]').action
+(runAskCommand). Add a bin entry "sleuth": "./dist/index.js" with a
+shebang line in packages/cli/package.json.
+
+Write packages/cli/src/__tests__/cli.test.ts mocking runPipeline and
+investigate (do not hit real network/LLM):
+- analyze command writes all 3 markdown files to the expected output dir
+- analyze command persists last-session.json correctly
+- ask command without a prior session prints the correct guidance message
+- ask command with a scripted 'exit' input terminates cleanly and deletes
+  last-session.json
+
+Run auto-lint skill. Append entry to prompts.md
+
+---
