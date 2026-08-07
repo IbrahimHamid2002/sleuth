@@ -11,7 +11,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json && tsc-alias -p tsconfig.json --resolve-full-paths",
     "test": "vitest run --passWithNoTests",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:e2e": "vitest run src/__tests__/analyze.e2e.test.ts"
   },
   "dependencies": {
     "@sleuth/core": "*",
