@@ -753,3 +753,51 @@ described for "pipeline.ts" will happen naturally when pipeline.ts is
 built in its own upcoming task; skip step 4 of this prompt entirely for now.
 
 ---
+
+## SQLite-backed summary cache (SummaryCache)
+
+### Goal
+Implement the `better-sqlite3`-backed `SummaryCache` class per ARCHITECTURE.md Section 5's schema (cache_key/file_path/content_hash/summary_json/created_at, 7-day TTL, idx_file_path index), with deterministic key/content hashing and in-memory hit/miss stats, plus a dry-run unit test suite against an in-memory database.
+
+### User Prompt
+Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
+Then,
+Read ARCHITECTURE.md Section 5 (SQLite Cache Schema Definition).
+
+Add dependency to packages/core: better-sqlite3, @types/better-sqlite3.
+
+Implement packages/core/src/cache/sqlite-cache.ts:
+- export class SummaryCache
+  constructor(dbPath?: string) — default to path.join(os.homedir(),
+  '.sleuth', 'cache.sqlite'), ensure the directory exists via mkdirSync
+  recursive.
+  - initialize(): creates the `summaries` table exactly as specified in
+    ARCHITECTURE.md Section 5, plus the idx_file_path index, using
+    CREATE TABLE IF NOT EXISTS / CREATE INDEX IF NOT EXISTS.
+  - buildKey(repoId: string, commitHash: string, filePath: string,
+    contentHash: string, promptVersion: string): string
+    Returns sha256 hex digest of the 5 values joined by ':'.
+  - hashContent(content: string): string — sha256 hex digest of raw content.
+  - get(key: string): FileSummary | null
+    Query by cache_key. If found, check (Date.now() - created_at) < 7 days
+    in ms; return parsed summary_json if fresh, else null (treat as miss,
+    do not delete the row).
+  - set(key: string, filePath: string, contentHash: string, summary:
+    FileSummary): void — upsert (INSERT OR REPLACE).
+  - getStats(): { hits: number; misses: number }
+    Track counters in-memory on the instance, incremented by get() calls;
+    expose a resetStats() too.
+  - close(): void — closes the underlying database handle.
+
+Write packages/core/src/__tests__/sqlite-cache.test.ts using an in-memory
+db (':memory:' path) covering:
+- set then get returns the same summary
+- get on a non-existent key returns null and increments misses
+- get on an entry older than 7 days (manually insert with an old
+  created_at) returns null
+- buildKey is deterministic — same inputs always produce the same key
+- hashContent changes when content changes
+
+Run auto-lint skill. Append entry to prompts.md
+
+---
