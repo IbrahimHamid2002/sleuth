@@ -2907,3 +2907,318 @@ REPORT BACK:
 - Any deviation from the requested specification and the reason
 
 ---
+
+## Web routing and five application pages (Task 19B-2)
+
+### Goal
+Build the five approved application routes (`/`, `/docs`, `/web`, `/analyze/:runId`, `/results/:runId`) on top of Task 19A's design system and Task 19B-1's Redux/RTK Query data layer, completing the functional web flow end to end.
+
+### User Prompt
+Read SESSION_SUMMARY.md first. 
+Then,
+Read CLAUDE.md Sections 1, 2, 3, 4, and 5 in full. Read PRD.md
+Sections 4.8 and 4.9. Read ARCHITECTURE.md Sections 2 and 3, especially
+the @sleuth/web package boundary and the CLI package structure. Do NOT
+deviate from these.
+
+Prerequisites:
+- Task 18 API is complete.
+- Task 19A design system is complete.
+- Task 19B-1 Redux store, RTK Query API, and useAnalysis hook are
+  complete.
+
+This iteration intentionally covers the approved route/page set. Do not
+stop because this set contains more than three files. If work requires
+touching files outside this list, except package-lock.json, shadcn
+generated components, or prompts.md, STOP and explain why first.
+
+Approved target files:
+- packages/web/package.json
+- packages/web/src/main.tsx
+- packages/web/src/pages/LandingPage.tsx
+- packages/web/src/pages/DocsPage.tsx
+- packages/web/src/pages/WebPage.tsx
+- packages/web/src/pages/AnalysisPage.tsx
+- packages/web/src/pages/ResultsPage.tsx
+- required shadcn-generated UI files only
+- package-lock.json, if dependency installation updates it
+- prompts.md
+
+GOAL:
+Build the five application routes and complete the functional web flow
+on top of Task 19A and Task 19B-1. Do not replace the design foundation
+or data layer.
+
+PRESERVE AND USE THE EXISTING DESIGN SYSTEM:
+- Use shadcn/ui for base buttons, inputs, cards, dialogs, tabs,
+  collapsibles, progress indicators, tooltips, skeletons, and toasts.
+- Use Magic UI for hero sections, special cards, and visually prominent
+  CTA treatments where appropriate.
+- Use AnimateIcons for the approved icon system.
+- Use motion/react for animations.
+- Do not hand-roll competing Button, Input, Card, Dialog, Toast, Tabs,
+  or Progress primitives.
+- Preserve Orbitron as the global font.
+- Preserve the light/dark colors, theme-aware logos/favicons, persistent
+  shadcn Vite ThemeProvider, Navbar, theme toggle, GitHub icon, and
+  global shadcn Toaster from Task 19A.
+
+Add these dependencies if they are not already present:
+- react-markdown
+- remark-gfm
+- rehype-highlight
+- mermaid
+
+Generate any missing shadcn components through the official shadcn CLI.
+At minimum, the following may be needed:
+- tabs
+- progress
+- collapsible
+- tooltip
+- skeleton
+
+Do not guess or manually recreate a shadcn component if its official CLI
+version is available.
+
+SERVER-STATE RULE:
+All server state must continue to come from RTK Query. Do not introduce
+manual fetch calls, Axios, custom polling, setInterval, or component
+useState that duplicates run status, results, sessions, or
+investigations.
+
+Local React state is allowed only for ephemeral UI values such as:
+- repository URL input
+- PAT input
+- expanded/collapsed state
+- currently selected documentation tab
+
+ROUTING:
+Set up React Router with exactly these five routes:
+- `/`
+- `/docs`
+- `/web`
+- `/analyze/:runId`
+- `/results/:runId`
+
+Render the existing Navbar above all routes through a shared layout or
+equivalent root structure. Ensure the theme remains unchanged while
+navigating between routes.
+
+1. LANDING PAGE
+File: packages/web/src/pages/LandingPage.tsx
+Route: `/`
+
+Implement:
+- A semantic hero section with one clear h1.
+- App subtitle and a concise product description explaining that Sleuth
+  analyzes a repository, produces README/ARCHITECTURE/ONBOARDING
+  documentation, and supports Deep Dive questions.
+- Use an appropriate Magic UI hero or special-card treatment.
+- Use subtle motion/react entrance animation.
+- Respect reduced-motion preferences using motion/react's
+  useReducedMotion or the existing shared reduced-motion handling.
+- Two prominent CTAs:
+  - "Docs" navigates to `/docs`
+  - "Get Started" navigates to `/web`
+- Use accessible links or buttons with clear focus states.
+- Do not place the repository form or PAT field on this page.
+- Do not call RTK Query from this presentation-only page.
+
+2. DOCUMENTATION PAGE
+File: packages/web/src/pages/DocsPage.tsx
+Route: `/docs`
+
+Implement a comprehensive static CLI documentation page containing:
+- What the Sleuth CLI does
+- Installation instructions based on the actual workspace/package setup
+- CLI workflow: analyze → inspect generated documents → ask questions
+- `sleuth analyze <target> [--token PAT] [--max-files N] [--output DIR]`
+- `sleuth ask [question]`
+- `sleuth config`, but document only options that are confirmed by the
+  actual CLI implementation; do not invent unsupported flags
+- Explanation of public GitHub, private GitHub with PAT, and local path
+  usage
+- PAT security note
+- Explanation of the three generated Markdown documents
+- Deep Dive exit words and session behavior where relevant
+
+Inspect the implemented CLI package before documenting commands. If the
+implementation differs from PRD.md, report the discrepancy rather than
+inventing behavior.
+
+Use semantic headings, code blocks, shadcn Cards, and responsive
+navigation/content structure. This page is static and must not make API
+requests.
+
+3. WEB ANALYSIS INPUT PAGE
+File: packages/web/src/pages/WebPage.tsx
+Route: `/web`
+
+Implement:
+- A repository URL form using shadcn Input.
+- A visible and programmatically associated label for the URL input.
+- Client-side URL validation before submission.
+- A collapsible "Private repo?" section.
+- A password-type PAT input with a programmatically associated label.
+- Tooltip/help text exactly conveying:
+  "Never stored, only used for this request"
+- Use `aria-expanded` and `aria-controls` on the collapse trigger.
+- Submit through useAnalyzeRepoMutation from the Task 19B-1 API layer.
+- On success, navigate to `/analyze/:runId`.
+- On API failure, display a clear shadcn Toast error message.
+
+PAT SECURITY IS CRITICAL:
+- Keep the PAT only in ephemeral component state.
+- Never log it.
+- Never include it in a URL or query string.
+- Never persist it to localStorage or sessionStorage.
+- Never put it in an ordinary Redux slice.
+- Never include it in form state that is persisted or reused.
+- Use try/catch/finally around the mutation.
+- In finally, immediately clear the PAT component state.
+- Reset the PAT form control.
+- Reset the analyze mutation state if supported, so stale mutation UI
+  state is not retained.
+- Clear the PAT after both success and failure.
+
+Disable repeated submission while the analyze mutation is pending.
+Give the loading state a visible label instead of relying only on a
+spinner.
+
+4. ANALYSIS PROGRESS PAGE
+File: packages/web/src/pages/AnalysisPage.tsx
+Route: `/analyze/:runId`
+
+Implement:
+- Read runId through useParams.
+- Handle a missing/invalid runId gracefully.
+- Use the Task 19B-1 useAnalysis hook.
+- Render this ordered progress stepper:
+  Clone → Framework Detect → Discover → Score → Summarize →
+  Synthesize → Done
+- Highlight the current stage using progress.stage from RTK Query.
+- Display a live percentage bar for summarization progress using the
+  shadcn Progress component.
+- Include visible text for current stage and percentage.
+- Use motion/react for subtle active-stage transitions.
+- Redirect to `/results/:runId` after status becomes complete.
+- Stop progress polling when complete or error through useAnalysis.
+- Show API errors through accessible page content and a shadcn Toast.
+- Do not manually fetch status or results.
+
+5. RESULTS PAGE
+File: packages/web/src/pages/ResultsPage.tsx
+Route: `/results/:runId`
+
+Implement:
+- Fetch results through RTK Query.
+- Handle direct navigation, loading, missing run, incomplete run, and
+  API error states.
+- Tabs:
+  - README
+  - ARCHITECTURE
+  - ONBOARDING
+  - Deep Dive
+- Deep Dive must remain a clear placeholder for Task 20.
+
+Render documentation through:
+- react-markdown
+- remark-gfm
+- rehype-highlight
+
+Do not enable arbitrary raw HTML rendering from generated Markdown.
+
+MERMAID:
+- Render Mermaid fenced code blocks found in ARCHITECTURE content.
+- Dynamically import mermaid rather than adding a static top-level
+  Mermaid import.
+- Initialize Mermaid with an appropriately restrictive security
+  configuration because generated repository documentation is
+  untrusted content.
+- Show a readable fallback code block if Mermaid rendering fails.
+- Do not let a Mermaid failure crash the whole Results page.
+
+SIDEBAR:
+Use responsive shadcn Cards to show:
+- Repository metadata
+- Detected frameworks
+- An available file-count value from the actual API response
+- Collapsible audit log entries
+
+Do not invent a file-count property. Derive it only from available,
+well-defined response fields and label the value accurately.
+
+DOWNLOAD ACTIONS:
+- Download README
+- Download ARCHITECTURE
+- Download ONBOARDING
+- Download All
+
+Individual downloads must:
+- Create a Markdown Blob from the cached result string
+- Use an object URL temporarily
+- Trigger a browser download
+- Revoke the object URL after use
+
+Download All must call the Task 19B-1 `downloadResults` helper.
+Use shadcn Toast for clear success/error feedback.
+
+RESPONSIVENESS BASELINE:
+Build mobile-first layouts. Ensure all five routes remain usable at:
+- 375px mobile
+- 768px tablet
+- 1280px desktop
+
+Task 19C-1 will perform the final accessibility/responsiveness audit,
+but do not knowingly introduce inaccessible or desktop-only markup here.
+
+NAMING:
+Use self-explanatory names for all variables, functions, props, and
+derived values. Avoid vague names such as `data`, `val`, `temp`,
+`thing`, `obj`, and unnecessary single-letter names. Prefer:
+- repositoryUrl
+- personalAccessToken
+- isPrivateRepositorySectionExpanded
+- currentPipelineStage
+- architectureMarkdown
+- selectedDocumentationTab
+- repositoryAuditEntries
+
+MANUAL VERIFICATION:
+Verify this complete flow:
+1. Start on `/`
+2. Open `/docs` through the "Docs" CTA
+3. Return to `/`
+4. Open `/web` through "Get Started"
+5. Submit a repository URL
+6. Confirm navigation to `/analyze/:runId`
+7. Observe live progress
+8. Confirm navigation to `/results/:runId`
+9. Verify README, ARCHITECTURE, and ONBOARDING rendering
+10. Verify Mermaid rendering or its safe fallback
+11. Verify individual downloads and Download All
+12. Verify theme persistence across all five routes
+13. Verify PAT is cleared after both successful and failed requests
+
+VALIDATION:
+- Run TypeScript checking for packages/web.
+- Run the packages/web production build.
+- Invoke the auto-lint skill after every created or modified file,
+  scoped to packages/web.
+- Run the relevant lint --fix command where required.
+- Resolve all remaining lint, type, and build errors.
+
+Append this complete user prompt verbatim to prompts.md using the exact
+CLAUDE.md rule 5 format.
+
+REPORT BACK:
+- Files changed
+- Components/pages added
+- shadcn components generated
+- Dependencies added
+- Manual verification results
+- Build/type-check/lint results
+- Missing assets or API contract mismatches
+- Deviations from the specification and why
+
+---
