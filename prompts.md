@@ -1989,3 +1989,377 @@ make these apis super-fast & production grade because the LLM calls takes ttime 
 Run auto-lint skill. Append entry to prompts.md
 
 ---
+
+## Token-Aware Rate Limiting, Cerebras Fallback Provider, and Doc/Prompt Fixes
+
+### Goal
+Stop the Groq 429s uncovered by the live `sleuth analyze` diagnostic (concurrency-vs-tokens-per-minute mismatch) via an immediate stopgap plus a real token-aware rate limiter, add Cerebras as a new middle-rung fallback provider, and keep PRD.md/ARCHITECTURE.md in sync with the change.
+
+### User Prompt
+Context: This is the `sleuth` repo — a pipeline that clones a repo into a
+sandbox and generates ARCHITECTURE.md, ONBOARDING.md, and README.generated.md
+via a deterministic pipeline (CLI + web, same core).
+
+STEP 0 — Read first, before touching any code:
+- Read PRD.md at repo root, if it exists.
+- Read ARCHITECTURE.md at repo root, if it exists.
+Use these to understand existing conventions (naming, module boundaries,
+config patterns) before making changes below. Follow existing patterns
+rather than introducing new ones unless necessary.
+
+STEP 1 — Immediate stopgap (do this first, separate commit):
+- In summarizer.ts, reduce MAX_CONCURRENT_BATCHES from 6 to 3.
+- This alone should stop most Groq 429s until Step 2 lands. Commit this
+  on its own so it can be reverted independently.
+
+STEP 2 — Real fix: token-aware rate limiting (packages/core/src/llm/rate-limiter.ts):
+- Extend TokenBucketRateLimiter to track BOTH requests-per-minute (existing)
+  AND tokens-per-minute (new), per provider+model.
+- Before each request, estimate token cost as:
+  input_tokens ≈ batch_chars / 4  (use MAX_BATCH_CHARS as the batch size source)
+  output_tokens = the model's configured max output tokens (e.g. SUMMARIZER_MAX_TOKENS)
+  total_estimate = input_tokens + output_tokens
+- Check total_estimate against BOTH the RPM and TPM budget before firing.
+  If either would be exceeded, queue/delay the request — do not drop it,
+  do not fire it and rely on retry/fallback to absorb the overage.
+- Remove the hardcoded `GROQ_FREE_TIER_RPM = 28` in pipeline.ts. Replace
+  with a per-provider config object, e.g.:
+  {
+    groq:     { rpm: <current known value>, tpm: <current known value> },
+    gemini:   { rpm: <current known value>, tpm: <current known value> },
+    cerebras: { rpm: null, tpm: null } // placeholder, see Step 3
+  }
+  Pull the current known Groq/Gemini numbers from wherever they're already
+  referenced in the codebase (rate-limiter.ts, pipeline.ts, or provider
+  client files) rather than guessing.
+- Route Gemini calls through this SAME limiter — it is currently unguarded,
+  which is why 4 files fell back to placeholders in the last run. Gemini's
+  calls must be gated by its own rpm/tpm entry in the config above.
+
+STEP 3 — Add Cerebras as a new fallback provider:
+- Implement a Cerebras client following the same pattern as the existing
+  groq/gemini client implementations (auth, request/response shape, error
+  handling).
+- Wire it into the fallback chain (see Step 4).
+- IMPORTANT: Do not hardcode Cerebras rpm/tpm values from documentation or
+  blog posts — public numbers for Cerebras's free tier are inconsistent
+  and unverified as of now. Instead:
+  (a) set conservative placeholder defaults (assume the tightest published
+      figures, not the most generous),
+  (b) add a clear TODO/comment noting these must be confirmed by pulling
+      real rate-limit headers from a live Cerebras API call before being
+      trusted in production, the same way Groq's real limits were confirmed.
+
+STEP 4 — Fallback chain:
+- Order: Groq → Cerebras → Gemini → placeholder summary.
+- Keep existing Gemini and placeholder-fallback logic intact — just insert
+  Cerebras as the new middle rung.
+- Run the existing test suite (if present) after wiring this together and
+  fix any failures before considering this done.
+
+STEP 5 — Update docs if needed:
+- If these changes make anything in ARCHITECTURE.md (e.g. the Backend Flow
+  Chart, Components section, or any rate-limiter/provider description) or
+  PRD.md stale or inaccurate, update those files to reflect the new design.
+  Only touch what's actually affected — don't rewrite unrelated sections.
+
+STEP 6 — Logging:
+- Append this entire prompt, verbatim, to prompts.md as per CLAUDE.md rules
+
+STEP 7 — Session summary:
+- At the end, once everything above is done and tests pass, update
+  SESSION_SUMMARY.md
+
+---
+
+## Rate Limiter Escape Hatch, Deep Dive Provider Routing, Short-Query Fast Path, and Empty-Response Fix
+
+### Goal
+Fix the token-bucket deadlock (a single oversized request could wait forever), route the Deep Dive agent through Groq then Cerebras as its sole final fallback with no silent placeholder degradation, add a cheap short-query fast path, and find + fix the root cause of the agent's empty-first-response bug.
+
+### User Prompt
+CONTEXT: This prompt supersedes the previous rate-limiter prompt. It
+extends the earlier TPM/RPM escape-hatch fix to handle Groq as a pool of
+TWO separate accounts (different keys, independently limited), and adds
+specific routing + bug fixes for the "deep dive agent" feature.
+
+STEP 0 — Read first:
+- Read PRD.md and ARCHITECTURE.md at repo root if they exist, to confirm
+  current conventions before changing anything below.
+- Locate the "deep dive agent" implementation in the repo (search for
+  "deep dive", "deepDive", or similar) — this is a separate consumer of
+  the LLM stack from the doc-synthesis pipeline. Confirm where it lives
+  and how it currently selects providers/models before making changes.
+
+STEP 1 — Escape-hatch fix (still required, do this regardless of Step 2):
+In TokenBucketRateLimiter.waitForBudget():
+- Do NOT enlarge the bucket's max capacity to fit oversized requests —
+  that breaks the per-minute rate guarantee for subsequent requests.
+- Add an explicit branch: if estimatedTokens > this.tpm for the account
+  being checked, wait until that account's bucket is fully refilled to
+  its own tpm, then admit the request and set
+  tokenBudget = Math.max(0, tpm - estimatedTokens).
+- Add a unit test reproducing the original deadlock: a single request
+  with estimatedTokens > tpm must resolve (not hang) within one refill
+  interval.
+
+STEP 2 — Multi-account Groq pooling:
+Groq access is via TWO separate API keys/accounts with independently
+tracked rate limits (not shared). Refactor the rate limiter / Groq client
+to support a pool of accounts per provider instead of a single bucket:
+
+  groq: {
+    accounts: [
+      { key: env.GROQ_API_KEY_1, rpm: <pull live>, tpm: <pull live> },
+      { key: env.GROQ_API_KEY_2, rpm: <pull live>, tpm: <pull live> }
+    ]
+  }
+
+- Do NOT assume both accounts have identical limits — pull live rate-limit
+  headers from BOTH keys separately (same method used for Groq/Cerebras
+  before) and populate each account's config independently. Leave clear
+  TODOs with placeholder conservative defaults if live values aren't
+  available at implementation time.
+- Selection strategy: before firing a request, check all accounts in the
+  pool for one with enough headroom (both RPM and TPM) for the estimated
+  token cost. Pick the account with the MOST available headroom, not
+  naive round-robin — this avoids parking a large request behind an
+  account that's already near its ceiling when another account has room.
+- If no account currently has budget, wait for the soonest refill. If the
+  estimate exceeds every account's own tpm cap individually, apply the
+  Step 1 escape hatch against whichever account has the LARGEST tpm in
+  the pool.
+- Keep this as a generic "AccountPool" concept (not Groq-specific), so
+  future providers with multiple keys can reuse it.
+
+STEP 3 — Deep dive agent: provider routing
+- When the deep dive agent needs a completion, try Groq's
+  `llama-3.3-70b-versatile` FIRST, via the pooled multi-account Groq
+  client from Step 2.
+- If Groq fails (rate-limited across BOTH accounts, or errors), fall back
+  to Cerebras `gpt-oss-120b`.
+- Cerebras is the FINAL fallback for the deep dive agent specifically —
+  do not chain further providers after it for this agent. If Cerebras
+  also fails, surface a clear, explicit error to the user in real time —
+  do NOT silently degrade to a placeholder response here, since this is
+  an interactive, user-facing path (unlike the doc-synthesis pipeline).
+
+STEP 4 — Deep dive agent: fast path for short queries
+- Investigate the current flow: confirm whether every query, regardless
+  of length/complexity, goes through the full deep-dive pipeline (e.g.
+  multi-step retrieval, full context assembly).
+- Add a lightweight classification step: short/simple queries (define a
+  clear, reversible heuristic — e.g. a word-count threshold constant —
+  document your reasoning for the chosen threshold) route through a
+  reduced-context, single-call fast path instead of the full pipeline.
+- Do not sacrifice correctness for speed: if the fast-path classifier is
+  uncertain whether a query is "simple," default to the full pipeline
+  rather than risk an incomplete answer.
+
+STEP 5 — Fix empty first-response bug
+- Reproduce: the deep dive agent's FIRST response in a session currently
+  comes back empty.
+- Investigate root cause — do not assume, verify against the actual code.
+  Areas worth checking: a streaming handler discarding the first chunk;
+  a warm-up/priming call whose side effects (e.g. mutating conversation
+  history) leak into the next real call; a race between UI render and
+  promise resolution; history array being appended to before the first
+  real completion lands.
+- Fix the root cause and add a regression test asserting the first
+  response in a fresh session is non-empty.
+
+STEP 6 — Docs:
+- If Steps 1–5 make anything in ARCHITECTURE.md or PRD.md stale
+  (provider routing description, rate-limiter design, deep dive agent
+  flow), update only the affected sections.
+
+STEP 7 — Logging:
+- Append this entire prompt, verbatim, to prompts.md as per CLAUDE.md rules
+
+STEP 8 — Session summary:
+- Once everything above is done and tests pass, update SESSION_SUMMARY.md
+  summarizing: what changed, which files were touched, what assumptions
+  were made (esp. the short-query threshold and any placeholder Groq
+  account-2 rate limits), and what still needs manual confirmation (e.g.
+  verifying live rate-limit headers for both Groq accounts).
+
+---
+
+## Heartbeat Bus, Rate Limiter Debt/Escalation, and Pipeline Watchdog Rewiring
+
+### Goal
+Replace the rate limiter's floor-to-zero escape hatch with a debt-tracked one that throws a typed `RateLimitEscalationError` past a hard wait timeout instead of polling forever, introduce a process-wide heartbeat bus so a legitimate rate-limited wait can signal liveness to the pipeline's stall watchdog without an `onProgress` stage transition, and add regression tests for the debt path, the escalation timeout, and the watchdog's pulse-vs-stall behavior.
+
+### User Prompt
+You are refactoring the Sleuth monorepo (@sleuth/core) to fix a critical
+"Error: Pipeline Stalled" deadlock. Root cause: TokenBucketRateLimiter.waitForBudget()
+polls for a token amount that can exceed total bucket capacity, causing an
+unsatisfiable infinite wait. Because no HTTP error is thrown, callWithFallback
+never triggers, and the 90s watchdog kills the process with false-positive stalls.
+
+Implement the following in packages/core/src/llm/, exactly matching this
+architecture, in STRICT TypeScript (strict: true, no `any`, no implicit
+returns, exhaustive error typing):
+
+1. Create packages/core/src/llm/heartbeat-bus.ts — a singleton EventEmitter-based
+   bus (`heartbeatBus.pulse(source, detail)`) used to signal liveness across
+   the rate limiter, summarizer, and synthesis stages.
+
+2. Refactor packages/core/src/llm/rate-limiter.ts (TokenBucketRateLimiter):
+   - Add an escape hatch: if estimatedTokens > tpmCapacity, wait only until
+     the bucket reaches full capacity, then allow the request through and
+     track the overflow as `debt`, repaid silently from future refills
+     before crediting visible balance.
+   - Emit heartbeatBus.pulse() on every poll tick during waitForBudget.
+   - Add a hardWaitTimeoutMs (default 20000ms); if budget isn't secured
+     within this window, throw a typed RateLimitEscalationError (include
+     waitedMs, estimatedTokens, accountId) instead of continuing to poll.
+   - Add small random jitter to the poll interval to avoid synchronized
+     polling across parallel summarizer workers.
+
+3. Update packages/core/src/pipeline.ts:
+   - Add a PipelineWatchdog class that resets its idle timer on ANY
+     heartbeatBus 'pulse' event (not just task-completion events), and
+     only fires "Pipeline Stalled" after 90s with zero pulses from any
+     source. Expose a `.touch(source, detail?)` method for stages that
+     don't go through the rate limiter (discovery, parsing, scoring).
+   - Wire this watchdog into the main orchestrator function, calling
+     `.touch()` at each major stage boundary.
+
+4. Update packages/core/src/llm/account-pool.ts (or agent/providers.ts):
+   - Implement/refactor callWithFallback<T>(providers) to catch
+     RateLimitEscalationError specifically and immediately proceed to the
+     next provider in the fallback chain (Groq -> Cerebras -> Gemini),
+     without any HTTP-level error being required to trigger it.
+
+5. Update all call sites in packages/core/src/documentation/summarizer.ts
+   and the synthesis stage to route through callWithFallback with the
+   three-provider chain, passing accurate token estimates from
+   packages/core/src/llm/provider.ts's estimator.
+
+Constraints:
+- Strictly local-first: no telemetry, no external state, no new runtime
+  dependencies beyond what's already in the workspace.
+- Production-ready: full JSDoc on public methods, no console.log (use the
+  existing logger if present), proper error typing, no `any`.
+- Highly optimized: avoid unnecessary allocations in the poll loop, avoid
+  busy-waiting tighter than the configured pollIntervalMs.
+- Preserve all existing public function signatures used elsewhere in the
+  codebase unless a signature change is strictly necessary — if it is,
+  update every call site and explain why in a code comment.
+- Add unit tests (packages/core/src/llm/__tests__/rate-limiter.test.ts)
+  covering: (a) oversized single request never hangs and resolves via debt
+  path, (b) hardWaitTimeoutMs correctly throws RateLimitEscalationError,
+  (c) watchdog does NOT fire during a legitimate 30s rate-limited wait but
+  DOES fire during a genuinely non-pulsing 91s hang.
+
+Do not change the sequential pipeline stage order (Discovery -> Framework
+Detection -> Parsing -> Scoring -> Summarization -> Synthesis). Do not
+introduce agentic behavior into document generation stages — the ReAct
+agent remains scoped to Deep Dive only.
+
+---
+
+## Live analyze + Deep Dive validation against research-writer-agent
+
+### Goal
+Run `sleuth analyze` against a real external repository with a real GitHub PAT, diagnose and fix whatever real errors surfaced during that live run, and validate the Deep Dive agent against the analyzed repo with real test queries.
+
+### User Prompt
+i want you to do `sleuth analyze https://github.com/IbrahimHamid2002/research-writer-agent --token [REDACTED — real PAT value stripped before logging, per CLAUDE.md §4 rule 4: never write a PAT to disk]` and fix the errors in the mostoptimized way possible coming in the process. also do some test queries with the deep dive agent to check whether its running correctly or not.
+
+---
+
+## Verify @sleuth/api routes, session lifecycle, and provider-sharing refactor against spec
+
+### Goal
+Verify that the already-implemented `@sleuth/api` package (analyze routes, Deep Dive session routes + SSE streaming, session reaper, Express entry point) matches PRD §4.9/§5 and ARCHITECTURE.md §2's core-isolation rule, resolve any outstanding lint issues, and confirm the test suite passes end-to-end.
+
+### User Prompt
+Read CLAUDE.md Sections 1, 2, 4, and 5 in full. Read PRD.md Sections 4.9
+and 5. Read ARCHITECTURE.md Section 2 (the @sleuth/api depends on
+@sleuth/core only dependency rule). Do NOT deviate from these.
+
+After any file is created or modified, run the auto-lint skill (per
+CLAUDE.md Critical Constraint rule 6) scoped to packages/api, and
+resolve any remaining errors manually. Do not leave lint errors
+unresolved before reporting back.
+
+Add dependencies to packages/api/package.json: express, cors, archiver,
+uuid (and their @types/* where applicable). Add a workspace dependency
+on the local @sleuth/core package.
+
+Implement packages/api/src/routes/analyze.ts as an Express Router:
+- POST /analyze — body: { url?, localPath?, pat? }. Validate exactly one
+  of url/localPath is present (Zod schema). Enforce max 2 concurrent
+  runs via an in-memory counter — respond 429 "Server busy, try again
+  shortly" if exceeded. Generate a runId (uuid), store an initial
+  RunState in an in-memory Map<string, RunState>, kick off runPipeline
+  ASYNCHRONOUSLY (do not await in the handler) updating the stored
+  RunState via the onProgress callback, wrapped so completion/errors
+  update state.status to 'complete'/'error'. Respond immediately
+  { runId }. NEVER log the pat value — use redactSecrets from
+  @sleuth/core on any request logging middleware (CLAUDE.md rule 4).
+- GET /runs/:runId/status — returns { status, progress, error? } from
+  the in-memory Map, 404 if runId unknown.
+- GET /runs/:runId/results — 400 if status isn't 'complete'; otherwise
+  returns { meta, synthesis, summaries: top 50 by score, auditLog,
+  durationMs }.
+- GET /runs/:runId/download — uses archiver to zip the 3 markdown docs
+  in-memory and stream as application/zip with Content-Disposition.
+Cap stored runs at 50 — evict oldest on insert when exceeded (also call
+cleanupSandbox for evicted entries if their sandbox wasn't already
+cleaned).
+
+Implement packages/api/src/routes/sessions.ts as an Express Router:
+- POST /sessions/start — body: { runId }. Looks up the completed run's
+  sandboxPath/repoMeta/summaries, calls createSession, stores in an
+  in-memory Map<string, DeepDiveSession>. Returns { sessionId }.
+- POST /sessions/:sessionId/ask — body: { question }. Generates an
+  investigationId, stores a pending investigation record, kicks off
+  investigate() asynchronously passing an onEvent callback that appends
+  events to an in-memory array keyed by investigationId (for the SSE
+  endpoint to read from), calls touchSession. Returns { investigationId }
+  immediately.
+- GET /sessions/:sessionId/investigations/:id/stream — Server-Sent
+  Events endpoint. Set headers: Content-Type: text/event-stream,
+  Cache-Control: no-cache, Connection: keep-alive. Poll the in-memory
+  event array for this investigationId every 200ms and write any new
+  events as `event: {type}\ndata: {JSON}\n\n`, closing the stream once
+  an 'answer' event has been sent or after a 65s safety timeout.
+- POST /sessions/:sessionId/end — calls terminateSession, removes from
+  the Map, returns { success: true }.
+
+Implement packages/api/src/session-reaper.ts:
+- export function startSessionReaper(sessions: Map<string,
+  DeepDiveSession>): NodeJS.Timeout
+  setInterval every 5 minutes: for each session where (Date.now() -
+  lastActivityAt) > 30 minutes, call terminateSession and delete from
+  the map, console.log a reap notice.
+
+Implement packages/api/src/index.ts:
+Express app, cors middleware restricted to [process.env.WEB_ORIGIN,
+'http://localhost:5173'], express.json(), mount both routers under
+/api, a global error-handling middleware that redacts secrets via
+@sleuth/core redactSecrets before logging and returns
+{ error: message }, start the session reaper, listen on
+process.env.PORT.
+
+Write packages/api/src/__tests__/api.test.ts using supertest, mocking
+runPipeline and investigate:
+- Full flow: POST /analyze → poll /status until complete → GET
+  /results → POST /sessions/start → POST /ask → GET SSE stream
+  receives an 'answer' event → POST /end → verify session removed
+  from map
+- POST /analyze with both url and localPath returns 400
+- Exceeding 2 concurrent runs returns 429
+
+Run the auto-lint skill (per CLAUDE.md rule 6) and fix any issues.
+Append an entry to prompts.md using the exact format defined in
+CLAUDE.md rule 5. Report back: files changed, tests added, any
+deviations from the original spec and why.
+
+If any step seems to require touching more than 3 files outside this
+task's target list, STOP and flag it before proceeding.
+
+---

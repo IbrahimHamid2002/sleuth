@@ -1,8 +1,7 @@
-const CODE_FENCE_PATTERN = /```(?:json)?\s*\n?([\s\S]*?)\n?```/;
-const TRAILING_COMMA_PATTERN = /,(\s*[}\]])/g;
+import { JSON_REPAIR_CODE_FENCE_PATTERN, JSON_REPAIR_TRAILING_COMMA_PATTERN } from '../constants';
 
 function stripCodeFence(raw: string): string {
-  const match = CODE_FENCE_PATTERN.exec(raw);
+  const match = JSON_REPAIR_CODE_FENCE_PATTERN.exec(raw);
 
   return match?.[1] ?? raw;
 }
@@ -35,7 +34,7 @@ export function extractJSON(raw: string): unknown {
     return JSON.parse(trimmed);
   } catch (err) {
     try {
-      return JSON.parse(trimmed.replace(TRAILING_COMMA_PATTERN, '$1'));
+      return JSON.parse(trimmed.replace(JSON_REPAIR_TRAILING_COMMA_PATTERN, '$1'));
     } catch {
       throw err;
     }

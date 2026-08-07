@@ -4,14 +4,8 @@ import { mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
-import type { FileSummary } from '../types';
-
-const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
-interface SummaryRow {
-  summary_json: string;
-  created_at: number;
-}
+import { SUMMARY_CACHE_TTL_MS } from '../constants';
+import type { FileSummary, SummaryRow } from '../types';
 
 export class SummaryCache {
   private readonly db: Database.Database;
@@ -53,7 +47,7 @@ export class SummaryCache {
       .prepare<[string], SummaryRow>('SELECT summary_json, created_at FROM summaries WHERE cache_key = ?')
       .get(key);
 
-    if (row === undefined || Date.now() - row.created_at >= CACHE_TTL_MS) {
+    if (row === undefined || Date.now() - row.created_at >= SUMMARY_CACHE_TTL_MS) {
       this.misses += 1;
 
       return null;

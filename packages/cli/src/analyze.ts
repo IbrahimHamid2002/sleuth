@@ -1,4 +1,4 @@
-import type { FileSummary, RepoInput, RepoMeta, SynthesisResult } from '@sleuth/core';
+import type { RepoInput } from '@sleuth/core';
 import { redactSecrets, runPipeline } from '@sleuth/core';
 import chalk from 'chalk';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -7,10 +7,10 @@ import { join } from 'node:path';
 import ora from 'ora';
 
 import { ensureGroqApiKey } from './config';
+import { ANALYZE_CACHE_HIT_COUNT_PATTERN, ANALYZE_CACHE_HIT_RATE_PATTERN, ANALYZE_GITHUB_URL_PATTERN } from './constants';
+import type { LastSession } from './types';
 
-const GITHUB_URL_PATTERN = /github\.com/i;
-const CACHE_HIT_RATE_PATTERN = /Cache hit rate: ([\d.]+)%/;
-const CACHE_HIT_COUNT_PATTERN = /\((\d+)\/(\d+) files served from cache\)/;
+export type { AnalyzeOptions, LastSession } from './types';
 
 // Resolved lazily (not a module-level constant) so tests can point HOME/
 // USERPROFILE at a sandbox directory before invoking a command, without
@@ -23,24 +23,8 @@ export function getSessionFile(): string {
   return join(getSessionDir(), 'last-session.json');
 }
 
-export interface AnalyzeOptions {
-  token?: string;
-  maxFiles?: string;
-  output?: string;
-  resume?: boolean;
-}
-
-export interface LastSession {
-  sandboxPath: string;
-  repoMeta: RepoMeta;
-  summaries: FileSummary[];
-  // The 3 pre-generated docs from this run, carried into the Deep Dive
-  // session so `ask` can check them before falling back to live file tools.
-  synthesis: SynthesisResult;
-}
-
 function buildRepoInput(target: string, token?: string): RepoInput {
-  if (GITHUB_URL_PATTERN.test(target)) {
+  if (ANALYZE_GITHUB_URL_PATTERN.test(target)) {
     return { type: 'github', url: target, pat: token };
   }
 
@@ -89,9 +73,8 @@ export async function runAnalyzeCommand(
   ).start();
 
   // Core logs stray console.warn lines (e.g. a missing LLM API key) while the
-  // pipeline runs, entirely independent of the spinner it knows nothing
-  // about — without clearing the spinner's line first, ora's redraw and the
-  // warning's own write interleave into garbled, concatenated output.
+  // pipeline runs, independent of the spinner — without clearing the
+  // spinner's line first, ora's redraw and the warning interleave into garbled output.
   const originalWarn = console.warn;
 
   console.warn = (...args: Parameters<typeof console.warn>): void => {
@@ -118,11 +101,11 @@ export async function runAnalyzeCommand(
     writeFileSync(join(outputDir, 'ONBOARDING.md'), result.synthesis.onboarding, 'utf-8');
 
     const cacheEntry = result.auditLog.find(
-      (entry) => entry.stage === 'summarization' && CACHE_HIT_RATE_PATTERN.test(entry.detail),
+      (entry) => entry.stage === 'summarization' && ANALYZE_CACHE_HIT_RATE_PATTERN.test(entry.detail),
     );
-    const cacheRateMatch = cacheEntry !== undefined ? CACHE_HIT_RATE_PATTERN.exec(cacheEntry.detail) : null;
+    const cacheRateMatch = cacheEntry !== undefined ? ANALYZE_CACHE_HIT_RATE_PATTERN.exec(cacheEntry.detail) : null;
     const cacheHitRate = cacheRateMatch !== null ? `${cacheRateMatch[1]}%` : 'n/a';
-    const cacheCountMatch = cacheEntry !== undefined ? CACHE_HIT_COUNT_PATTERN.exec(cacheEntry.detail) : null;
+    const cacheCountMatch = cacheEntry !== undefined ? ANALYZE_CACHE_HIT_COUNT_PATTERN.exec(cacheEntry.detail) : null;
     const cacheHitCount = cacheCountMatch !== null ? Number(cacheCountMatch[1]) : 0;
 
     printSummaryBox(result.summaries.length, cacheHitRate, result.failedFiles.length, result.durationMs);

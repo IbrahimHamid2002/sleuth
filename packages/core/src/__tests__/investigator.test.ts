@@ -115,7 +115,14 @@ describe('investigate', () => {
       'Final answer citing `foo.ts`.',
     ]);
 
-    const result = await investigate('What does foo.ts do?', session, emptyProviders, rateLimiters);
+    // Long enough (>12 words) to skip Step 4's short-query fast path, so this
+    // test exercises only the full ReAct loop's mechanics, unaffected by it.
+    const result = await investigate(
+      'Can you walk me through exactly what the foo.ts file does and how it behaves in detail?',
+      session,
+      emptyProviders,
+      rateLimiters,
+    );
 
     expect(result.reasoningTrace).toHaveLength(3);
     expect(result.plan).toBe('Inspect foo.ts from a few angles.');
@@ -135,7 +142,13 @@ describe('investigate', () => {
       'Final answer after exhausting iterations.',
     ]);
 
-    const result = await investigate('Explain the whole repo', session, emptyProviders, rateLimiters);
+    // Long enough (>12 words) to skip Step 4's short-query fast path.
+    const result = await investigate(
+      'Please explain the whole repository in detail, covering its structure and every major component thoroughly',
+      session,
+      emptyProviders,
+      rateLimiters,
+    );
 
     expect(result.iterations).toBe(MAX_ITERATIONS);
     expect(result.reasoningTrace).toHaveLength(MAX_ITERATIONS);
@@ -151,7 +164,13 @@ describe('investigate', () => {
       'Final answer despite the malformed step.',
     ]);
 
-    const result = await investigate('Explain foo.ts', session, emptyProviders, rateLimiters);
+    // Long enough (>12 words) to skip Step 4's short-query fast path.
+    const result = await investigate(
+      'Please explain in detail what foo.ts does, how it works, and why it matters',
+      session,
+      emptyProviders,
+      rateLimiters,
+    );
 
     expect(result.iterations).toBe(3);
     expect(result.reasoningTrace).toHaveLength(2);
@@ -168,7 +187,13 @@ describe('investigate', () => {
       'Final answer about foo.ts.',
     ]);
 
-    const result = await investigate('What is in foo.ts?', session, emptyProviders, rateLimiters);
+    // Long enough (>12 words) to skip Step 4's short-query fast path.
+    const result = await investigate(
+      'Could you describe in detail exactly what is contained inside the foo.ts file?',
+      session,
+      emptyProviders,
+      rateLimiters,
+    );
 
     const readFileSpy = vi.mocked(fs.readFileSync);
 
@@ -211,7 +236,14 @@ describe('investigate', () => {
         'Final answer from real investigation.',
       ]);
 
-      const result = await investigate('What does the internal helper function do exactly?', docSession, emptyProviders, rateLimiters);
+      // Long enough (>12 words) to skip Step 4's short-query fast path, so
+      // this test's call-count assertion below stays exactly as documented.
+      const result = await investigate(
+        'Could you explain in detail exactly what the internal helper function does and why it exists?',
+        docSession,
+        emptyProviders,
+        rateLimiters,
+      );
 
       expect(result.answeredFromDocs).toBe(false);
       expect(result.iterations).toBe(2);
@@ -229,7 +261,13 @@ describe('investigate', () => {
         'Final answer despite the malformed fast-path response.',
       ]);
 
-      const result = await investigate('Some question', docSession, emptyProviders, rateLimiters);
+      // Long enough (>12 words) to skip Step 4's short-query fast path.
+      const result = await investigate(
+        'Some question that is intentionally long enough to bypass the short query fast path entirely',
+        docSession,
+        emptyProviders,
+        rateLimiters,
+      );
 
       expect(result.answeredFromDocs).toBe(false);
       expect(result.answer).toBe('Final answer despite the malformed fast-path response.');
@@ -238,9 +276,68 @@ describe('investigate', () => {
     it('skips the fast-path call entirely (no generatedDocs on the session) and behaves exactly as before', async () => {
       mockResponseSequence([combinedJSON({ thought: 'No docs available', action: 'finish' }), 'Final answer with no docs.']);
 
-      const result = await investigate('Some question', session, emptyProviders, rateLimiters);
+      // Long enough (>12 words) to skip Step 4's short-query fast path, so
+      // this test's call-count assertion below stays exactly as documented.
+      const result = await investigate(
+        'Some question that is intentionally long enough to bypass the short query fast path entirely',
+        session,
+        emptyProviders,
+        rateLimiters,
+      );
 
       expect(result.answeredFromDocs).toBe(false);
+      expect(callWithFallback).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('short-query fast path (Step 4)', () => {
+    it('answers a short/simple question directly from file summaries, with zero live tool calls', async () => {
+      mockResponseSequence([JSON.stringify({ answerable: true, answer: 'foo.ts defines a simple constant (from file summaries).' })]);
+
+      const result = await investigate('What does foo.ts do?', session, emptyProviders, rateLimiters);
+
+      expect(result.answeredFromSummaries).toBe(true);
+      expect(result.answeredFromDocs).toBe(false);
+      expect(result.iterations).toBe(0);
+      expect(result.reasoningTrace).toEqual([]);
+      expect(result.answer).toBe('foo.ts defines a simple constant (from file summaries).');
+      expect(callWithFallback).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls through to the full investigation when the short-query fast path says not answerable', async () => {
+      mockResponseSequence([
+        JSON.stringify({ answerable: false }),
+        combinedJSON({
+          thought: 'Summaries did not cover this, reading foo.ts',
+          action: 'tool_call',
+          toolName: 'read_file',
+          toolArgs: { path: 'foo.ts' },
+        }),
+        decisionJSON({ thought: 'Done', action: 'finish' }),
+        'Final answer from real investigation.',
+      ]);
+
+      const result = await investigate('What does foo.ts do?', session, emptyProviders, rateLimiters);
+
+      expect(result.answeredFromSummaries).toBe(false);
+      expect(result.answer).toBe('Final answer from real investigation.');
+      // 1 short-query fast-path call + 1 combined call + 1 finish call + 1 synthesis call.
+      expect(callWithFallback).toHaveBeenCalledTimes(4);
+    });
+
+    it('skips the short-query fast path entirely for a long/complex question (never sacrifices correctness for speed)', async () => {
+      mockResponseSequence([combinedJSON({ thought: 'Investigating directly', action: 'finish' }), 'Final answer for a long question.']);
+
+      const result = await investigate(
+        'Please explain in exhaustive detail exactly how the whole repository is structured and organized',
+        session,
+        emptyProviders,
+        rateLimiters,
+      );
+
+      expect(result.answeredFromSummaries).toBe(false);
+      // No short-query fast-path call at all (question is long) — just the
+      // combined plan+decision call + synthesis.
       expect(callWithFallback).toHaveBeenCalledTimes(2);
     });
   });

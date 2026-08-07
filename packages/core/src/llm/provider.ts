@@ -1,22 +1,24 @@
-import type { TokenBucketRateLimiter } from './rate-limiter';
+import {
+  PROVIDER_CHARS_PER_TOKEN_ESTIMATE,
+  PROVIDER_DEFAULT_RATE_LIMIT_WAIT_MS,
+  PROVIDER_MAX_SINGLE_RATE_LIMIT_WAIT_MS,
+  PROVIDER_RATE_LIMIT_MAX_RETRIES,
+  PROVIDER_SERVER_ERROR_BACKOFFS_MS,
+} from '../constants';
+import type { LLMProvider, ProviderChainConfig } from '../types';
 
-export interface LLMProvider {
-  name: string;
-  complete(prompt: string, opts: { maxTokens: number; temperature: number }, signal?: AbortSignal): Promise<string>;
+import { RateLimitEscalationError, type TokenBucketRateLimiter } from './rate-limiter';
+
+export type { LLMProvider, ProviderChainConfig } from '../types';
+
+// A provider occasionally returns a "successful" response whose completion
+// text is empty/whitespace-only — a real, observed failure mode (root cause
+// of a past Deep Dive empty-first-response bug). Every provider below treats
+// that the same as a missing completion: a thrown error, not a silent
+// "success" with nothing in it, so callWithFallback's retry/fallback catches it.
+function isBlank(text: string): boolean {
+  return text.trim().length === 0;
 }
-
-const SERVER_ERROR_BACKOFFS_MS = [500, 1000, 2000];
-const DEFAULT_RATE_LIMIT_WAIT_MS = 2000;
-const RATE_LIMIT_MAX_RETRIES = 3;
-// A daily/token-quota-exhausted 429 can carry a `retry-after` of thousands of
-// seconds (or more) — honoring that literally turns one call into a
-// multi-minute-or-longer unabortable block for every caller that doesn't
-// thread a signal through (found live: this is what was actually behind
-// `sleuth analyze` hitting its fixed 300000ms pipeline timeout on ordinary
-// repos — not a hang, just one huge uninterruptible wait). Cap the wait for a
-// SINGLE retry so a huge value degrades to "this attempt failed, move on"
-// instead of "this call blocks indefinitely."
-const MAX_SINGLE_RATE_LIMIT_WAIT_MS = 15_000;
 
 function throwIfAborted(signal: AbortSignal | undefined, providerName: string): void {
   if (signal?.aborted === true) {
@@ -24,9 +26,8 @@ function throwIfAborted(signal: AbortSignal | undefined, providerName: string): 
   }
 }
 
-// Abortable so a caller-side deadline (e.g. investigator.ts's 60s budget) can
-// interrupt a retry-after wait instead of it running to completion in the
-// background — see the callWithFallback/fetchWithRetry signal threading below.
+// Abortable so a caller-side deadline can interrupt a retry-after wait
+// instead of letting it run to completion in the background.
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted === true) {
@@ -48,11 +49,9 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-// Groq's `retry-after` header follows RFC 7231 (seconds); the ms default above
-// only applies when the header is absent or unparseable. 429 gets the same
-// retry budget as 5xx (3 attempts) — a single retry was too easy to exhaust
-// on Groq's free tier and caused premature fallback to Gemini even when Groq
-// would have succeeded on a second or third attempt.
+// Groq's `retry-after` header follows RFC 7231 (seconds); the ms default only
+// applies when the header is absent/unparseable. 429 gets the same retry
+// budget as 5xx — a single retry was too easy to exhaust on Groq's free tier.
 async function fetchWithRetry(
   url: string,
   init: RequestInit,
@@ -71,7 +70,7 @@ async function fetchWithRetry(
       return response;
     }
 
-    if (response.status === 429 && rateLimitRetries < RATE_LIMIT_MAX_RETRIES) {
+    if (response.status === 429 && rateLimitRetries < PROVIDER_RATE_LIMIT_MAX_RETRIES) {
       rateLimitRetries += 1;
 
       const retryAfterHeader = response.headers.get('retry-after');
@@ -79,8 +78,8 @@ async function fetchWithRetry(
       const requestedWaitMs =
         retryAfterSeconds !== undefined && Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
           ? retryAfterSeconds * 1000
-          : DEFAULT_RATE_LIMIT_WAIT_MS;
-      const waitMs = Math.min(requestedWaitMs, MAX_SINGLE_RATE_LIMIT_WAIT_MS);
+          : PROVIDER_DEFAULT_RATE_LIMIT_WAIT_MS;
+      const waitMs = Math.min(requestedWaitMs, PROVIDER_MAX_SINGLE_RATE_LIMIT_WAIT_MS);
 
       await sleep(waitMs, signal);
 
@@ -88,7 +87,7 @@ async function fetchWithRetry(
     }
 
     if (response.status >= 500) {
-      const waitMs = SERVER_ERROR_BACKOFFS_MS[serverErrorRetries];
+      const waitMs = PROVIDER_SERVER_ERROR_BACKOFFS_MS[serverErrorRetries];
 
       if (waitMs !== undefined) {
         serverErrorRetries += 1;
@@ -142,8 +141,60 @@ export class GroqProvider implements LLMProvider {
     const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
     const content = data.choices?.[0]?.message?.content;
 
-    if (content === undefined) {
+    if (content === undefined || isBlank(content)) {
       throw new Error('groq returned no completion content');
+    }
+
+    return content;
+  }
+}
+
+// OpenRouter's API is OpenAI-compatible — same request/response shape as
+// GroqProvider, different host. Replaces Cerebras as the free-tier fallback
+// (that account was confirmed billing-blocked — HTTP 402 — regardless of
+// rate limits). No default model: unlike Cerebras/Gemini, there's no single
+// free model that's the obviously right choice across every role, so every
+// caller must explicitly state which one it wants (see ProviderChainConfig's
+// comment and each caller's own model constant for the reasoning).
+export class OpenRouterProvider implements LLMProvider {
+  readonly name = 'openrouter';
+  private readonly apiKey: string;
+  private readonly model: string;
+
+  constructor(apiKey: string, model: string) {
+    if (apiKey.length === 0) {
+      throw new Error(`OpenRouterProvider requires a non-empty API key (model "${model}")`);
+    }
+
+    this.apiKey = apiKey;
+    this.model = model;
+  }
+
+  async complete(prompt: string, opts: { maxTokens: number; temperature: number }, signal?: AbortSignal): Promise<string> {
+    const response = await fetchWithRetry(
+      'https://openrouter.ai/api/v1/chat/completions',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: 'user', content: prompt }],
+          max_tokens: opts.maxTokens,
+          temperature: opts.temperature,
+        }),
+      },
+      this.name,
+      signal,
+    );
+
+    const data = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const content = data.choices?.[0]?.message?.content;
+
+    if (content === undefined || isBlank(content)) {
+      throw new Error('openrouter returned no completion content');
     }
 
     return content;
@@ -155,7 +206,10 @@ export class GeminiProvider implements LLMProvider {
   private readonly apiKey: string;
   private readonly model: string;
 
-  constructor(apiKey: string, model = 'gemini-2.0-flash') {
+  // Live-verified against a real key: `gemini-flash-latest` is the one
+  // confirmed to actually respond with content (gemini-2.0-flash returns 429
+  // with zero free-tier quota; 2.5/1.5-flash 404 for this API version).
+  constructor(apiKey: string, model = 'gemini-flash-latest') {
     if (apiKey.length === 0) {
       throw new Error('GeminiProvider requires a non-empty API key');
     }
@@ -186,7 +240,7 @@ export class GeminiProvider implements LLMProvider {
     };
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
-    if (text === undefined) {
+    if (text === undefined || isBlank(text)) {
       throw new Error('gemini returned no completion content');
     }
 
@@ -194,21 +248,11 @@ export class GeminiProvider implements LLMProvider {
   }
 }
 
-export interface ProviderChainConfig {
-  groqApiKeyEnvVar: string;
-  groqModel: string;
-  geminiApiKeyEnvVar?: string;
-  geminiModel?: string;
-}
-
-// Different call sites (pipeline summarization vs. synthesis, the Deep Dive
-// agent's reasoning vs. synthesis chains) commonly share the same Gemini
-// fallback env var name while naming distinct Groq ones — warn only once per
-// distinct missing var name per process so a missing shared key doesn't log
-// the same line once per caller.
+// Different call sites commonly share the same Gemini fallback env var while
+// naming distinct Groq ones — warn only once per distinct missing var name.
 const warnedMissingEnvVars = new Set<string>();
 
-function warnMissingEnvVarOnce(envVar: string, providerLabel: string): void {
+export function warnMissingEnvVarOnce(envVar: string, providerLabel: string): void {
   if (warnedMissingEnvVars.has(envVar)) {
     return;
   }
@@ -217,11 +261,10 @@ function warnMissingEnvVarOnce(envVar: string, providerLabel: string): void {
   console.warn(`${envVar} is not set — skipping ${providerLabel} provider`);
 }
 
-// Every caller (pipeline summarization, pipeline synthesis, and the Deep Dive
-// agent's two internal chains) explicitly names which env var/model it wants —
-// this function has no built-in notion of "roles" itself, so different callers
-// reading the same env var but different models (or vice versa) never
-// accidentally share a provider chain that should have stayed separate.
+// Every caller explicitly names which env var/model it wants — no built-in
+// notion of "roles," so different callers reading the same env var but
+// different models never accidentally share a chain that should stay
+// separate. Fallback order is Groq -> OpenRouter -> Gemini by push order.
 export function createProviderChain(config: ProviderChainConfig): LLMProvider[] {
   const providers: LLMProvider[] = [];
   const groqApiKey = process.env[config.groqApiKeyEnvVar];
@@ -230,6 +273,15 @@ export function createProviderChain(config: ProviderChainConfig): LLMProvider[] 
     providers.push(new GroqProvider(groqApiKey, config.groqModel));
   } else {
     warnMissingEnvVarOnce(config.groqApiKeyEnvVar, 'Groq');
+  }
+
+  const openrouterApiKeyEnvVar = config.openrouterApiKeyEnvVar ?? 'OPENROUTER_API_KEY';
+  const openrouterApiKey = process.env[openrouterApiKeyEnvVar];
+
+  if (openrouterApiKey !== undefined) {
+    providers.push(new OpenRouterProvider(openrouterApiKey, config.openrouterModel));
+  } else {
+    warnMissingEnvVarOnce(openrouterApiKeyEnvVar, 'OpenRouter');
   }
 
   const geminiApiKeyEnvVar = config.geminiApiKeyEnvVar ?? 'GEMINI_API_KEY';
@@ -244,6 +296,10 @@ export function createProviderChain(config: ProviderChainConfig): LLMProvider[] 
   return providers;
 }
 
+export function estimateTokenCost(prompt: string, maxOutputTokens: number): number {
+  return Math.ceil(prompt.length / PROVIDER_CHARS_PER_TOKEN_ESTIMATE) + maxOutputTokens;
+}
+
 export async function callWithFallback(
   providers: LLMProvider[],
   prompt: string,
@@ -252,7 +308,7 @@ export async function callWithFallback(
   signal?: AbortSignal,
 ): Promise<string> {
   const errors: string[] = [];
-  let previousProviderName: string | undefined;
+  const estimatedTokens = estimateTokenCost(prompt, opts.maxTokens);
 
   for (const provider of providers) {
     if (signal?.aborted === true) {
@@ -261,23 +317,30 @@ export async function callWithFallback(
       break;
     }
 
-    if (previousProviderName !== undefined) {
-      console.warn(`[LLM Fallback] Provider "${previousProviderName}" failed, attempting "${provider.name}"`);
-    }
-
     try {
       const limiter = rateLimiters.get(provider.name);
 
       if (limiter !== undefined) {
-        await limiter.waitForToken();
+        // Waits until BOTH the request-count and estimated-token budget allow
+        // this call through; past `hardWaitTimeoutMs` it throws
+        // RateLimitEscalationError (caught below like any provider failure),
+        // so this provider is skipped and the next one is tried immediately.
+        await limiter.waitForBudget(estimatedTokens, signal);
       }
 
       return await provider.complete(prompt, opts, signal);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
+      const reason =
+        err instanceof RateLimitEscalationError
+          ? `rate-limit escalation — ${err.message}`
+          : err instanceof Error
+            ? err.message
+            : String(err);
 
-      errors.push(`${provider.name}: ${message}`);
-      previousProviderName = provider.name;
+      errors.push(`${provider.name}: ${reason}`);
+      // Logged immediately so the real reason is visible even when a later
+      // provider succeeds, rather than only surfacing if every provider fails.
+      console.warn(`[LLM Fallback] Provider "${provider.name}" failed (${reason}) — trying the next provider`);
     }
   }
 

@@ -1,13 +1,9 @@
 import simpleGit from 'simple-git';
 
+import { CLONE_GITHUB_URL_PATTERN, CLONE_GITHUB_URL_WITH_CAPTURES, CLONE_MAX_SANDBOX_SIZE_BYTES } from '../constants';
 import { redactSecrets } from '../security/sanitize';
 
 import { cleanupSandbox, getSandboxSizeBytes } from './sandbox-manager';
-
-// eslint-disable-next-line no-useless-escape -- matches RepoInputSchema's regex verbatim (schemas.ts)
-const GITHUB_URL_PATTERN = /^https:\/\/github\.com\/[\w.\-]+\/[\w.\-]+(\.git)?$/;
-const GITHUB_URL_WITH_CAPTURES = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?$/;
-const MAX_SANDBOX_SIZE_BYTES = 150 * 1024 * 1024;
 
 function buildAuthenticatedUrl(url: string, pat: string): string {
   const authUrl = new URL(url);
@@ -17,21 +13,15 @@ function buildAuthenticatedUrl(url: string, pat: string): string {
   return authUrl.toString();
 }
 
-// Confirms the supplied PAT (or anonymous access, if none) actually has read
-// access to this exact repo via GitHub's REST API, BEFORE ever invoking `git
-// clone`. This is the real security boundary — git's own credential
-// resolution can silently fall back to ambient host credentials (Windows
-// Credential Manager, a cached `gh` token, etc.) if the PAT embedded in the
-// clone URL is rejected, masking a wrong/missing PAT. Disabling that fallback
-// at the git-config/env layer (`-c credential.helper=`, `GIT_CONFIG_NOSYSTEM`)
-// was tried and reverted: newer Git Credential Manager versions treat ANY
-// environment-based override of a "sensitive" setting (credential.helper,
-// GIT_CONFIG_GLOBAL, even an inherited GIT_EDITOR) as unsafe and refuse to run
-// at all when git is spawned with a hidden window — which is simple-git's
-// default on Windows — regardless of whether the PAT is valid. Checking
-// access independently, ahead of time, sidesteps that entirely.
+// Confirms the PAT (or anonymous access) actually has read access to this
+// exact repo via GitHub's REST API, BEFORE ever invoking `git clone` — the
+// real security boundary, since git's own credential resolution can silently
+// fall back to ambient host credentials if the PAT in the clone URL is
+// rejected. Disabling that fallback at the git-config layer was tried and
+// reverted: newer Git Credential Manager treats any such override as unsafe
+// and refuses to run when git is spawned hidden (simple-git's Windows default).
 async function verifyRepoAccess(url: string, pat: string | undefined): Promise<void> {
-  const match = GITHUB_URL_WITH_CAPTURES.exec(url);
+  const match = CLONE_GITHUB_URL_WITH_CAPTURES.exec(url);
 
   if (match === null) {
     return;
@@ -96,7 +86,7 @@ export async function cloneRepo(
   pat: string | undefined,
   targetDir: string,
 ): Promise<{ commitHash: string }> {
-  if (!GITHUB_URL_PATTERN.test(url)) {
+  if (!CLONE_GITHUB_URL_PATTERN.test(url)) {
     throw new Error('Invalid GitHub repository URL');
   }
 
@@ -106,17 +96,15 @@ export async function cloneRepo(
 
   try {
     // No custom env/config here deliberately: `verifyRepoAccess` above is the
-    // actual security boundary, so git can run with its own defaults. Forwarding
-    // ANY of the calling process's env (e.g. via `.env({ ...process.env, ... })`)
-    // is itself risky — a parent shell's pre-existing GIT_EDITOR/EDITOR (or
-    // similar) gets inherited and can trip the same "unsafe config" hardening
-    // credential.helper overrides did, for a variable this code never touched.
+    // real security boundary, so git can run with its own defaults —
+    // forwarding the calling process's env risks inheriting a pre-existing
+    // GIT_EDITOR/EDITOR that trips the same "unsafe config" hardening.
     await simpleGit().clone(cloneUrl, targetDir, ['--depth', '1', '--single-branch']);
   } catch (err) {
     throw toClearError(err);
   }
 
-  if (getSandboxSizeBytes(targetDir) > MAX_SANDBOX_SIZE_BYTES) {
+  if (getSandboxSizeBytes(targetDir) > CLONE_MAX_SANDBOX_SIZE_BYTES) {
     await cleanupSandbox(targetDir);
     throw new Error('Repository exceeds 150MB size limit');
   }

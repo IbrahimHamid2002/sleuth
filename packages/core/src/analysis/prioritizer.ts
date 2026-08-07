@@ -1,49 +1,15 @@
-import type { AuditEntry, FileNode, SubProjectProfile } from '../types';
+import {
+  PATH_SCORE_RULES,
+  PRIORITIZER_AUDIT_TOP_FILE_COUNT,
+  PRIORITIZER_ENTRY_POINT_BONUS,
+  PRIORITIZER_ENTRY_POINT_SIGNATURES,
+  PRIORITIZER_IMPORT_SCORE_CAP,
+  PRIORITIZER_IMPORT_SCORE_PER_IMPORTER,
+  PRIORITIZER_PATH_SCORE_BASELINE,
+} from '../constants';
+import type { AuditEntry, FileNode, ImportGraph, SubProjectProfile } from '../types';
 
-import type { ImportGraph } from './import-graph';
-
-const ENTRY_POINT_SIGNATURES = [
-  'app.listen(',
-  'createServer(',
-  'ReactDOM.createRoot(',
-  'ReactDOM.render(',
-  'NestFactory.create(',
-];
-
-const PATH_SCORE_BASELINE = 20;
-const IMPORT_SCORE_PER_IMPORTER = 4;
-const IMPORT_SCORE_CAP = 40;
-const ENTRY_POINT_BONUS = 30;
-const AUDIT_TOP_FILE_COUNT = 20;
-
-export const PATH_SCORE_RULES: Array<{ pattern: RegExp; score: number }> = [
-  {
-    // Tier 1 — Critical Anchors
-    pattern: /(^|\/)(package\.json|(server|app|main|index)\.(ts|js)x?)$/,
-    score: 100,
-  },
-  {
-    // Tier 2 — Config & Docs
-    pattern: /(^|\/)(README\.md|tsconfig\.json|vite\.config\.\w+|next\.config\.\w+)$/,
-    score: 85,
-  },
-  {
-    // Tier 3 — Backend/Frontend Core
-    pattern:
-      /(^|\/)(routes|controllers|services|middleware|auth|config|database|models|app|pages|layouts|store|api)\//,
-    score: 70,
-  },
-  {
-    // Tier 4 — Supporting Structure
-    pattern: /(^|\/)(components|hooks|context|shared|lib)\//,
-    score: 55,
-  },
-  {
-    // Tier 5 — Shared Tooling
-    pattern: /(^|\/)(docker[^/]*|\.eslintrc[^/]*|prettier[^/]*|nx\.json|turbo\.json)$|(^|\/)\.github\/workflows\//,
-    score: 40,
-  },
-];
+export { PATH_SCORE_RULES } from '../constants';
 
 export function computePathScore(path: string): number {
   for (const rule of PATH_SCORE_RULES) {
@@ -52,7 +18,7 @@ export function computePathScore(path: string): number {
     }
   }
 
-  return PATH_SCORE_BASELINE;
+  return PRIORITIZER_PATH_SCORE_BASELINE;
 }
 
 function scanForEntryPointSignatures(files: FileNode[], contentCache: Map<string, string>): string[] {
@@ -65,7 +31,7 @@ function scanForEntryPointSignatures(files: FileNode[], contentCache: Map<string
       continue;
     }
 
-    if (ENTRY_POINT_SIGNATURES.some((signature) => content.includes(signature))) {
+    if (PRIORITIZER_ENTRY_POINT_SIGNATURES.some((signature) => content.includes(signature))) {
       matched.push(file.path);
     }
   }
@@ -107,8 +73,8 @@ export function detectEntryPoints(
 
 export function scoreFile(file: FileNode, importGraph: ImportGraph, entryPoints: Set<string>): number {
   const pathScore = computePathScore(file.path);
-  const importScore = Math.min((importGraph.inDegree.get(file.path) ?? 0) * IMPORT_SCORE_PER_IMPORTER, IMPORT_SCORE_CAP);
-  const entryPointBonus = entryPoints.has(file.path) ? ENTRY_POINT_BONUS : 0;
+  const importScore = Math.min((importGraph.inDegree.get(file.path) ?? 0) * PRIORITIZER_IMPORT_SCORE_PER_IMPORTER, PRIORITIZER_IMPORT_SCORE_CAP);
+  const entryPointBonus = entryPoints.has(file.path) ? PRIORITIZER_ENTRY_POINT_BONUS : 0;
 
   return pathScore + importScore + entryPointBonus;
 }
@@ -125,7 +91,7 @@ export function prioritizeFiles(
     .sort((a, b) => b.score - a.score);
 
   const topFilesSummary = scored
-    .slice(0, AUDIT_TOP_FILE_COUNT)
+    .slice(0, PRIORITIZER_AUDIT_TOP_FILE_COUNT)
     .map((file) => `${file.path} (${file.score})`)
     .join(', ');
 
@@ -133,7 +99,7 @@ export function prioritizeFiles(
     timestamp: Date.now(),
     stage: 'prioritization',
     action: 'complete',
-    detail: `Top ${Math.min(AUDIT_TOP_FILE_COUNT, scored.length)} files by priority score: ${topFilesSummary}`,
+    detail: `Top ${Math.min(PRIORITIZER_AUDIT_TOP_FILE_COUNT, scored.length)} files by priority score: ${topFilesSummary}`,
   });
 
   return scored.slice(0, maxFiles);

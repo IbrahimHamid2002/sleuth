@@ -127,6 +127,7 @@ Any request to add these mid-build must be deferred to a "Future Improvements" b
 - Hard bounds: max 10 iterations, 60-second total timeout
 - Session terminates on: user typing `exit`/`quit`/`bye`/`goodbye` (CLI), explicit "End Session" (Web), or 30-minute idle timeout (Web only)
 - Termination MUST delete the sandboxed repo clone and clear all in-memory session state
+- Provider routing (interactive/user-facing, distinct from the doc-synthesis pipeline's provider chain): Groq first, OpenRouter as the sole and FINAL fallback (model: `nvidia/nemotron-3-ultra-550b-a55b:free`) — no third provider. If both fail, the agent surfaces a clear, explicit error to the user in real time; it must never silently degrade to a placeholder response, since a stalled or blank-looking answer on a live, user-facing path is worse than a visible error
 
 
 
@@ -191,5 +192,5 @@ Any request to add these mid-build must be deferred to a "Future Improvements" b
 - **Hard deadline: 10 days**, single developer, using Claude Code as the primary implementation assistant
 - Every new engineering decision must be checked against Section 3 (Anti-Goals) before implementation
 - If a proposed feature cannot be completed in a single day's milestone slot without risking downstream days, it is deferred to "Future Improvements," not compressed or corner-cut
-- All LLM usage must remain on 100% free-tier providers (Groq primary, Gemini fallback)
+- All LLM usage must remain on 100% free-tier providers (Groq primary, OpenRouter secondary fallback, Gemini final fallback)
 

@@ -1,32 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { FrameworkProfile, SubProjectProfile } from '../types';
-
-interface PackageJsonShape {
-  dependencies?: Record<string, string>;
-  devDependencies?: Record<string, string>;
-  workspaces?: unknown;
-}
-
-const MONOREPO_MARKER_FILES = ['pnpm-workspace.yaml', 'lerna.json', 'turbo.json', 'nx.json'];
-const CANDIDATE_WORKSPACE_DIRS = ['apps', 'packages', 'libs', 'shared'];
-
-const EXCLUDED_SCAN_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  'coverage',
-  '.cache',
-  '.next',
-  '__pycache__',
-  'generated',
-  'snapshots',
-  '__snapshots__',
-  'cypress',
-  'e2e',
-]);
+import { FRAMEWORK_CANDIDATE_WORKSPACE_DIRS, FRAMEWORK_EXCLUDED_SCAN_DIRS, FRAMEWORK_MONOREPO_MARKER_FILES } from '../constants';
+import type { FrameworkProfile, PackageJsonShape, SubProjectProfile } from '../types';
 
 function readPackageJsonAt(packageJsonPath: string): PackageJsonShape | undefined {
   if (!existsSync(packageJsonPath)) {
@@ -78,7 +54,7 @@ function detectPackageManagerAt(dirPath: string): 'npm' | 'yarn' | 'pnpm' {
 }
 
 function hasFormalMonorepoMarkers(repoRoot: string, rootPackageJson: PackageJsonShape | undefined): boolean {
-  if (MONOREPO_MARKER_FILES.some((markerFile) => existsSync(join(repoRoot, markerFile)))) {
+  if (FRAMEWORK_MONOREPO_MARKER_FILES.some((markerFile) => existsSync(join(repoRoot, markerFile)))) {
     return true;
   }
 
@@ -86,7 +62,7 @@ function hasFormalMonorepoMarkers(repoRoot: string, rootPackageJson: PackageJson
 }
 
 function detectWorkspaceDirs(repoRoot: string): string[] {
-  return CANDIDATE_WORKSPACE_DIRS.filter((dirName) => {
+  return FRAMEWORK_CANDIDATE_WORKSPACE_DIRS.filter((dirName) => {
     const dirPath = join(repoRoot, dirName);
 
     return existsSync(dirPath) && statSync(dirPath).isDirectory();
@@ -103,7 +79,7 @@ function findNestedPackageJsonDirs(repoRoot: string): string[] {
   }
 
   return entries
-    .filter((entry) => entry.isDirectory() && !EXCLUDED_SCAN_DIRS.has(entry.name))
+    .filter((entry) => entry.isDirectory() && !FRAMEWORK_EXCLUDED_SCAN_DIRS.has(entry.name))
     .map((entry) => entry.name)
     .filter((dirName) => existsSync(join(repoRoot, dirName, 'package.json')))
     .sort();

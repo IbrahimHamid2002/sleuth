@@ -55,6 +55,6 @@ export const RepoInputSchema = z
       .optional(),
     pat: z.string().optional(),
   })
-  .refine((d) => (d.type === 'local' ? !!d.path : !!d.url), {
+  .refine((repoInput) => (repoInput.type === 'local' ? !!repoInput.path : !!repoInput.url), {
     message: 'path required for local, url required for github',
   });

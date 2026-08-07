@@ -73,9 +73,11 @@ sleuth/
 │   │   ├── package.json
 │   │   ├── tsconfig.json
 │   │   └── src/
-│   │       ├── types.ts                  # Shared TS interfaces
+│   │       ├── index.ts                  # package entrypoint — public exports
+│   │       ├── types.ts                  # ALL TS interfaces/type aliases — shared domain types plus every module's own local types, each labeled with its source module
+│   │       ├── constants.ts              # ALL literal constants (limits, regexes, prompts, timeouts) pulled out of every module, each labeled with its source module
 │   │       ├── schemas.ts                # Zod schemas (validation layer)
-│   │       ├── pipeline.ts               # Orchestrator — wires all stages
+│   │       ├── pipeline.ts               # Orchestrator — wires all stages, PipelineWatchdog
 │   │       │
 │   │       ├── security/
 │   │       │   ├── path-guard.ts         # assertSafePath()
@@ -97,18 +99,23 @@ sleuth/
 │   │       │   └── sqlite-cache.ts       # better-sqlite3 wrapper
 │   │       │
 │   │       ├── llm/
-│   │       │   ├── provider.ts           # Groq + Gemini fallback chain
-│   │       │   └── rate-limiter.ts       # token bucket
+│   │       │   ├── provider.ts           # Groq + OpenRouter + Gemini fallback chain, callWithFallback
+│   │       │   ├── rate-limiter.ts       # token bucket (RPM+TPM, debt-tracked escape hatch, RateLimitEscalationError)
+│   │       │   ├── heartbeat-bus.ts      # process-wide liveness pulse bus (rate limiter → pipeline stall watchdog)
+│   │       │   └── account-pool.ts       # generic multi-account pooling (headroom-based selection) — infra, not yet wired to a specific caller
 │   │       │
 │   │       ├── documentation/
 │   │       │   ├── summarizer.ts         # batched LLM summarization
 │   │       │   ├── citation-mapper.ts    # symbol → [file:line] mapping
-│   │       │   └── synthesizer.ts        # README/ARCHITECTURE/ONBOARDING
+│   │       │   ├── synthesizer.ts        # README/ARCHITECTURE/ONBOARDING
+│   │       │   ├── directory-tree.ts     # deterministic directory tree renderer
+│   │       │   └── mermaid-validator.ts  # heuristic Mermaid syntax validate/repair
 │   │       │
 │   │       ├── agent/
-│   │       │   ├── tools.ts              # 5 agent tools
+│   │       │   ├── tools.ts              # 6 agent tools
 │   │       │   ├── prompts.ts            # planning/reasoning/synthesis templates
-│   │       │   ├── investigator.ts       # ReAct loop
+│   │       │   ├── investigator.ts       # ReAct loop + doc/summary fast paths
+│   │       │   ├── providers.ts          # Deep Dive agent's own provider routing (Groq → OpenRouter, no Gemini)
 │   │       │   └── session.ts            # session lifecycle + visited cache
 │   │       │
 │   │       ├── utils/
@@ -120,13 +127,17 @@ sleuth/
 │   │   ├── package.json
 │   │   └── src/
 │   │       ├── index.ts                  # commander entrypoint
+│   │       ├── types.ts                  # ALL TS interfaces/type aliases, labeled with their source module
+│   │       ├── constants.ts              # ALL literal constants (regexes, URLs, exit words), labeled with their source module
 │   │       ├── analyze.ts                # `sleuth analyze` command
-│   │       └── ask.ts                    # `sleuth ask` REPL
+│   │       ├── ask.ts                    # `sleuth ask` REPL
+│   │       └── config.ts                 # `sleuth config` — persistent API-key store
 │   │
 │   ├── api/                              # @sleuth/api
 │   │   ├── package.json
 │   │   └── src/
 │   │       ├── index.ts                  # Express app + middleware
+│   │       ├── state.ts                  # in-memory AppState (runs/sessions/investigations)
 │   │       ├── routes/
 │   │       │   ├── analyze.ts            # POST /api/analyze, status, results, download
 │   │       │   └── sessions.ts           # session start/ask/end + SSE stream
@@ -135,18 +146,7 @@ sleuth/
 │   └── web/                              # @sleuth/web
 │       ├── package.json
 │       └── src/
-│           ├── pages/
-│           │   ├── LandingPage.tsx
-│           │   ├── AnalysisPage.tsx
-│           │   └── ResultsPage.tsx
-│           ├── components/
-│           │   ├── ProgressStepper.tsx
-│           │   ├── MarkdownViewer.tsx
-│           │   ├── FileTree.tsx
-│           │   └── DeepDivePanel.tsx
-│           ├── hooks/
-│           │   └── useAnalysis.ts
-│           └── api.ts
+│           └── main.tsx                  # scaffold only — no page consumes @sleuth/api yet
 ```
 
 ---
@@ -236,8 +236,10 @@ visitedFiles: Map<string /* path */, string /* content */>
 
 ## 6. Shared TypeScript Interfaces & Zod Schemas
 
+`types.ts` and `constants.ts` are the single source of truth for every type/interface and every literal constant in `@sleuth/core` — not just the cross-cutting domain types shown below. Each module that previously declared its own local types/constants now imports them from these two files instead (re-exporting any symbol other modules or tests still depend on by its original path), with a comment above each group marking which module it came from. This keeps every limit, regex, and prompt-shape constant discoverable in one place rather than scattered across ~25 files.
+
 ```typescript
-// packages/core/src/types.ts
+// packages/core/src/types.ts (excerpt — cross-cutting domain types)
 
 export interface RepoInput {
   type: 'local' | 'github';

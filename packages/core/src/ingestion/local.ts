@@ -3,10 +3,10 @@ import { cpSync, existsSync, readdirSync, statSync } from 'node:fs';
 import { join, sep } from 'node:path';
 import simpleGit from 'simple-git';
 
-const EXCLUDED_DIR_NAMES = new Set(['node_modules', '.git']);
+import { LOCAL_EXCLUDED_DIR_NAMES } from '../constants';
 
 function isExcludedPath(candidatePath: string): boolean {
-  return candidatePath.split(sep).some((segment) => EXCLUDED_DIR_NAMES.has(segment));
+  return candidatePath.split(sep).some((segment) => LOCAL_EXCLUDED_DIR_NAMES.has(segment));
 }
 
 function listSortedRelativeFiles(rootDir: string, currentDir: string = rootDir): string[] {

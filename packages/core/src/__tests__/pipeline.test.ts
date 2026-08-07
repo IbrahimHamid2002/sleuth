@@ -5,6 +5,7 @@ import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { MERMAID_DISCLAIMER } from '../documentation/synthesizer';
+import { heartbeatBus } from '../llm/heartbeat-bus';
 import * as providerModule from '../llm/provider';
 import { runPipeline } from '../pipeline';
 
@@ -112,10 +113,12 @@ describe('runPipeline', () => {
     expect(createProviderChain).toHaveBeenCalledWith({
       groqApiKeyEnvVar: 'GROQ_SUMMARIZER_API_KEY',
       groqModel: 'llama-3.1-8b-instant',
+      openrouterModel: 'google/gemma-4-26b-a4b-it:free',
     });
     expect(createProviderChain).toHaveBeenCalledWith({
       groqApiKeyEnvVar: 'GROQ_SYNTHESIZER_API_KEY',
       groqModel: 'llama-3.3-70b-versatile',
+      openrouterModel: 'openai/gpt-oss-20b:free',
     });
     expect(createProviderChain).toHaveBeenCalledTimes(2);
   });
@@ -232,6 +235,59 @@ describe('runPipeline', () => {
 
     expect(partialFailureEntry?.detail).toContain('src/utils/helper.ts');
   });
+
+  it('does not treat a legitimate rate-limited wait as a stall as long as it keeps pulsing the heartbeat bus', async () => {
+    vi.useFakeTimers();
+
+    try {
+      let longWaitStarted = false;
+
+      callWithFallback.mockImplementation(async (_providers, prompt: string) => {
+        if (prompt.includes('--- FILE:')) {
+          if (!longWaitStarted) {
+            longWaitStarted = true;
+
+            // Simulate a real TokenBucketRateLimiter.waitForBudget poll loop:
+            // no onProgress stage transition happens during this stretch,
+            // only heartbeatBus pulses — for comfortably longer than
+            // STALL_TIMEOUT_MS (90s), to prove pulses alone (not just stage
+            // transitions) keep the watchdog from firing.
+            for (let elapsed = 0; elapsed < 120_000; elapsed += 5_000) {
+              await new Promise<void>((resolve) => setTimeout(resolve, 5_000));
+              heartbeatBus.pulse('rate-limiter', 'simulated legitimate wait');
+            }
+          }
+
+          const paths = [...prompt.matchAll(/--- FILE: (.+?) ---/g)].map((match) => match[1]);
+
+          return JSON.stringify(
+            paths.map((path) => ({ path, purpose: `purpose for ${path}`, exports: [], dependencies: [], summary: `summary for ${path}` })),
+          );
+        }
+
+        if (prompt.includes('README.md')) {
+          return 'Generated README referencing `createApp`.';
+        }
+
+        if (prompt.includes('ARCHITECTURE.md')) {
+          return `${MERMAID_DISCLAIMER}\n\n\`\`\`mermaid\nflowchart TD\n  A --> B\n\`\`\`\n\nGenerated architecture referencing \`createApp\`.`;
+        }
+
+        return 'Generated onboarding referencing `createApp`.';
+      });
+
+      const runPromise = runPipeline({ type: 'local', path: fixtureDir }, { skipCache: true });
+
+      await vi.advanceTimersByTimeAsync(130_000);
+
+      const result = await runPromise;
+
+      createdSandboxPaths.push(result.sandboxPath);
+      expect(result.synthesis.readme.length).toBeGreaterThan(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20000);
 
   it('aborts as a stall — not a silent hang — when a stage makes no progress at all, and still cleans up the sandbox', async () => {
     vi.useFakeTimers();

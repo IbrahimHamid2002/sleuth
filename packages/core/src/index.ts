@@ -7,6 +7,7 @@ export {
   buildSynthesisPrompt,
   MAX_ITERATIONS,
 } from './agent/prompts';
+export { buildDeepDiveAgentProviders, buildDeepDiveAgentRateLimiters } from './agent/providers';
 export { createSession, terminateSession, touchSession } from './agent/session';
 export type { AgentContext, AgentTool } from './agent/tools';
 export { TOOLS } from './agent/tools';
@@ -26,11 +27,21 @@ export { generateTemplateFallback, MERMAID_DISCLAIMER, synthesize } from './docu
 export { cloneRepo } from './ingestion/clone';
 export { ingestLocal } from './ingestion/local';
 export { cleanupSandbox, createSandbox, getSandboxSizeBytes } from './ingestion/sandbox-manager';
+export type { PooledAccount } from './llm/account-pool';
+export { AccountPool, createGroqAccountPool } from './llm/account-pool';
+export type { HeartbeatEvent } from './llm/heartbeat-bus';
+export { heartbeatBus } from './llm/heartbeat-bus';
 export type { LLMProvider, ProviderChainConfig } from './llm/provider';
-export { callWithFallback, createProviderChain,GeminiProvider, GroqProvider } from './llm/provider';
-export { TokenBucketRateLimiter } from './llm/rate-limiter';
+export { callWithFallback, createProviderChain, estimateTokenCost, GeminiProvider, GroqProvider, OpenRouterProvider } from './llm/provider';
+export type { HeadroomSnapshot, ProviderRateLimits } from './llm/rate-limiter';
+export {
+  buildRateLimitersForProviders,
+  PROVIDER_RATE_LIMITS,
+  RateLimitEscalationError,
+  TokenBucketRateLimiter,
+} from './llm/rate-limiter';
 export type { PipelineOptions, PipelineResult } from './pipeline';
-export { runPipeline } from './pipeline';
+export { PipelineWatchdog, runPipeline } from './pipeline';
 export {
   AgentDecisionSchema,
   CombinedPlanAndDecisionSchema,
