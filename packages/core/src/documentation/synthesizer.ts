@@ -3,7 +3,6 @@ import {
   DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION,
   DOC_SYNTHESIS_CALL_TIMEOUT_MS,
   DOC_SYNTHESIS_FRONTEND_FRAMEWORKS,
-  DOC_SYNTHESIS_LICENSE_FILE_PATTERN,
   DOC_SYNTHESIS_MAX_ATTEMPTS,
   DOC_SYNTHESIS_MAX_MERMAID_REPAIR_ATTEMPTS,
   DOC_SYNTHESIS_MAX_TOKENS,
@@ -59,16 +58,9 @@ function formatSummariesBlock(summaries: FileSummary[]): string {
     .join('\n');
 }
 
-function hasLicenseFile(directoryTree: string): boolean {
-  return DOC_SYNTHESIS_LICENSE_FILE_PATTERN.test(directoryTree);
-}
-
 export function buildReadmePrompt(summaries: FileSummary[], repoMeta: RepoMeta, directoryTree: string): string {
   const summariesBlock = formatSummariesBlock(summaries);
   const frameworksLine = repoMeta.frameworks.length > 0 ? repoMeta.frameworks.join(', ') : 'none detected';
-  const licenseLine = hasLicenseFile(directoryTree)
-    ? 'A LICENSE file was detected in the repository — say so and point to it by name; do NOT guess or name a specific license type unless it is explicitly evident from the summaries.'
-    : 'No LICENSE file was detected in the repository — state this plainly rather than inventing a license.';
 
   return `You are generating a README.md for a code repository named "${repoMeta.name}".
 
@@ -97,9 +89,9 @@ Write a clear, well-structured, and DETAILED README.md. Produce ALL of the follo
 2. "## Overview" — a 2-4 sentence overview of what the project does and who it's for.
 3. "## Key Features" — a bulleted list of the concrete capabilities evident from the summaries.
 4. "## Tech Stack" — the detected frameworks (${frameworksLine}) and package manager (${repoMeta.packageManager}), plus any other notable libraries/tools evident from the summaries.
-5. "## Project Structure" — a short prose explanation of how the codebase is organized, followed by the exact directory tree above reproduced verbatim inside a plain \`\`\` code fence (not mermaid, no relabeling).
-6. "## Getting Started" — a brief pointer that full setup/onboarding instructions live in ONBOARDING.md, plus the single most essential command to get running.
-7. "## License" — ${licenseLine}
+5. "## Getting Started" — a brief pointer that full setup/onboarding instructions live in ONBOARDING.md, plus the single most essential command to get running.
+
+Do NOT include a "## Project Structure" or "## Directory Structure" section — that content already lives in ARCHITECTURE.md. Do NOT include a "## License" section.
 
 ${DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION} Output ONLY the Markdown document, no commentary before or after it.`;
 }
@@ -184,15 +176,12 @@ Write a clear ONBOARDING.md that gets a brand-new developer productive as fast a
 ${DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION} Output ONLY the Markdown document, no commentary before or after it.`;
 }
 
-function generateReadmeFallback(summaries: FileSummary[], repoMeta: RepoMeta, directoryTree: string): string {
+function generateReadmeFallback(summaries: FileSummary[], repoMeta: RepoMeta): string {
   const frameworksLine = repoMeta.frameworks.length > 0 ? repoMeta.frameworks.join(', ') : 'none detected';
   const fileList = summaries
     .slice(0, 20)
     .map((summary) => `- \`${summary.path}\`: ${summary.purpose}`)
     .join('\n');
-  const licenseLine = hasLicenseFile(directoryTree)
-    ? 'A LICENSE file is present in the repository — see it directly for terms.'
-    : 'No LICENSE file was detected in this repository.';
 
   return `# ${repoMeta.name}
 
@@ -215,19 +204,9 @@ ${fileList || '_No summarized files available._'}
 - Frameworks: ${frameworksLine}
 - Package manager: ${repoMeta.packageManager}
 
-## Project Structure
-
-\`\`\`
-${directoryTree}
-\`\`\`
-
 ## Getting Started
 
 See ONBOARDING.md for full setup instructions. Quick start: \`${repoMeta.packageManager} install\`
-
-## License
-
-${licenseLine}
 `;
 }
 
@@ -322,7 +301,7 @@ export function generateTemplateFallback(
   directoryTree: string,
 ): string {
   if (docType === 'readme') {
-    return generateReadmeFallback(summaries, repoMeta, directoryTree);
+    return generateReadmeFallback(summaries, repoMeta);
   }
 
   if (docType === 'architecture') {

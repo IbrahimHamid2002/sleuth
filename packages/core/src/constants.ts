@@ -201,10 +201,6 @@ INCORRECT (unquoted label containing ":" and "(" breaks parsing):
 flowchart TD
   CLI[CLI: entrypoint (main)] --> Core
 \`\`\``;
-// Deterministic license detection — a plain substring check against the real
-// directory tree, never an LLM guess of a license type it can't verify.
-export const DOC_SYNTHESIS_LICENSE_FILE_PATTERN = /(^|\/)LICEN[SC]E(\.[a-z0-9]+)?$/im;
-
 // From ingestion/clone.ts
 // eslint-disable-next-line no-useless-escape -- matches RepoInputSchema's regex verbatim (schemas.ts)
 export const CLONE_GITHUB_URL_PATTERN = /^https:\/\/github\.com\/[\w.\-]+\/[\w.\-]+(\.git)?$/;

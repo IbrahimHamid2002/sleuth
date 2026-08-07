@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   buildArchitecturePrompt,
+  buildReadmePrompt,
   generateTemplateFallback,
   MERMAID_DISCLAIMER,
   synthesize,
@@ -275,6 +276,24 @@ describe('synthesize', () => {
 
     expect(prompt).not.toContain('Not applicable — no frontend framework detected');
     expect(prompt).toContain('Frontend Component Relation Graph');
+  });
+
+  it('does not ask the LLM for a README License or Project Structure section — that content lives in ARCHITECTURE.md', () => {
+    const prompt = buildReadmePrompt(SUMMARIES, REPO_META, 'tree');
+
+    // The old enumerated-section instructions are gone, not just renamed —
+    // this phrasing was unique to the removed "## Project Structure" item.
+    expect(prompt).not.toContain('reproduced verbatim inside a plain');
+    expect(prompt).toContain('Do NOT include a "## Project Structure" or "## Directory Structure" section');
+    expect(prompt).toContain('Do NOT include a "## License" section.');
+  });
+
+  it('omits the License and Project Structure sections from the deterministic README fallback template', () => {
+    const fallback = generateTemplateFallback('readme', SUMMARIES, REPO_META, 'tree');
+
+    expect(fallback).not.toContain('## License');
+    expect(fallback).not.toContain('## Project Structure');
+    expect(fallback).toContain('## Getting Started');
   });
 
   it('repairs an invalid Mermaid diagram via one LLM call and splices in the corrected version', async () => {
