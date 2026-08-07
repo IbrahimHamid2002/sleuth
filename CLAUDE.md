@@ -57,15 +57,24 @@ These rules are **mandatory** and must be verified before any task is marked com
 | 5 | **Every prompt given to Claude Code must be logged** in `prompts.md` at the project root, in this exact format (append, never overwrite): |
 
 ```markdown
-## [YYYY-MM-DD HH:MM] Task: <short task title>
-**User Prompt:** <paste the exact user prompt here as-is>
-**Goal:** <one sentence — what this prompt was trying to achieve>
-**Files Changed:** `path/to/file1.ts`, `path/to/file2.ts`
-**How It Was Achieved:** <2-4 sentences describing the approach taken, 
-key functions/logic introduced, and any deviations from the original prompt>
-**Tests Added:** <test file(s), or "none — infra/config only">
+## <Task Name>
+
+### Goal
+<one-to-two line description of the task's objective>
+
+### User Prompt
+<exact prompt text as given by the user, verbatim>
+
 ---
 ```
+
+Where:
+- **Task Name** is a short, descriptive title for the task — no date or timestamp.
+- **Goal** sits directly below the Task Name heading: one to two lines stating what the task aims to achieve.
+- **User Prompt** sits directly below Goal: the user's prompt reproduced verbatim (exact wording, exact formatting — no paraphrasing, no trimming).
+- The three field headings use markdown heading levels (`##` for Task Name, `###` for Goal and User Prompt) so they stand out visually from surrounding text.
+- Once all three fields for an entry are complete, insert a horizontal rule (`---`) as a separator before the next entry.
+- All entries follow this exact structure, one after another, in order.
 
 | # | Rule |
 |---|---|

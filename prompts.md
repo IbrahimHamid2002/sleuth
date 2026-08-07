@@ -1,98 +1,755 @@
 # Prompt Execution Log
 
-## [2026-07-29 18:35] Task: npm workspaces monorepo scaffolding
+## npm workspaces monorepo scaffolding
 
-**Goal:** Stand up the initial npm workspaces monorepo structure (core/cli/api/web) with shared TS config, lint/format tooling, and env templates — no business logic.
-**Files Changed:** `package.json`, `tsconfig.base.json`, `.eslintrc.json`, `.eslintignore`, `.prettierrc.json`, `.prettierignore`, `.gitignore`, `.env.example`, `.env`, `packages/core/package.json`, `packages/core/tsconfig.json`, `packages/core/src/index.ts`, `packages/cli/package.json`, `packages/cli/tsconfig.json`, `packages/cli/src/index.ts`, `packages/api/package.json`, `packages/api/tsconfig.json`, `packages/api/src/index.ts`, `packages/web/package.json`, `packages/web/tsconfig.json`, `packages/web/vite.config.ts`, `packages/web/index.html`, `packages/web/src/main.tsx`
-**How It Was Achieved:** Created the root `package.json` with `workspaces: ["packages/*"]` and `build`/`test`/`lint` scripts per CLAUDE.md, plus `tsconfig.base.json` (strict, ES2022, ESM) that each package's `tsconfig.json` extends. Scaffolded `packages/core` (`@sleuth/core`, zero UI deps — `better-sqlite3`, `simple-git`, `zod` only), `packages/cli` (`@sleuth/cli` — commander/inquirer/ora, depends on `@sleuth/core`), `packages/api` (`@sleuth/api` — express, depends on `@sleuth/core`), and `packages/web` (`@sleuth/web` — React 18 + Vite), each with a single `console.log` placeholder entrypoint and no business logic. Added root `.eslintrc.json` (typescript-eslint recommended + prettier) and `.prettierrc.json`. Deviation: pinned `better-sqlite3` to `^13.0.2` instead of an `^11.x` line — Node 24 on this Windows machine has no prebuilt native binary for `better-sqlite3@11.x` and no Visual Studio C++ build tools for a source rebuild via node-gyp; `13.0.2` ships a prebuilt binary compatible with this Node/ABI/platform combination, verified via an isolated test install before pinning.
-**Tests Added:** none — infra/config only.
+### Goal
+Stand up the initial npm workspaces monorepo structure (core/cli/api/web) with shared strict TS config, lint/format tooling, and env templates, and verify the build succeeds — no business logic yet.
+
+### User Prompt
+Read PRD.md and ARCHITECTURE.md Section 3 (Modular Directory Tree).
+
+  Create an npm workspaces monorepo in this current directory with exact structure:
+  packages/core, packages/cli, packages/api, packages/web — each with its own
+  package.json and tsconfig.json extending a root tsconfig.base.json (strict
+  mode, ES2022 target, ESM modules).
+
+  Root package.json: workspaces: ["packages/*"], add root-level scripts:
+  "build": "npm run build --workspaces", "test": "npm run test --workspaces --if-present",
+  "lint": "eslint . --ext .ts,.tsx".
+
+  Add ESLint + Prettier config at root (typescript-eslint recommended rules).
+
+  Create .env.example & .env with: GROQ_SUMMARIZER_API_KEY=, GROQ_SYNTHESIZER_API_KEY=, GEMINI_API_KEY=, WEB_ORIGIN=,
+  PORT=3001, SESSION_SECRET=.
+
+  Do NOT write any business logic yet — this task is scaffolding only.
+  Create empty packages/core/src/index.ts, packages/cli/src/index.ts,
+  packages/api/src/index.ts as placeholders with a single console.log.
+
+  After creating files, run `npm install` and verify `npm run build` succeeds
+  with no errors across all workspaces.
+
+  Append an entry to prompts.md per the format in CLAUDE.md.
+
 ---
 
-## [2026-07-30 09:10] Task: Core shared types and Zod validation schemas
+## Core shared types and Zod validation schemas
 
-**Goal:** Implement the shared TypeScript interfaces and Zod schemas from ARCHITECTURE.md Section 6 in `packages/core`, with test coverage for the validation boundaries.
-**Files Changed:** `packages/core/src/types.ts`, `packages/core/src/schemas.ts`, `packages/core/src/__tests__/schemas.test.ts`, `packages/core/package.json`, `packages/core/tsconfig.json`, `.eslintrc.json`, `package.json`, `packages/web/vite.config.ts` (auto-fix only)
-**How It Was Achieved:** Added `types.ts` with the 10 interfaces (`RepoInput`, `RepoMeta`, `FileNode`, `Symbol`, `FileSummary`, `SynthesisResult`, `AuditEntry`, `AgentDecision`, `DeepDiveSession`, `InvestigationResult`) copied verbatim from ARCHITECTURE.md, no `any` anywhere. Added `schemas.ts` with `FileSummarySchema`, `AgentDecisionSchema`, `ToolArgsSchemas` (5 tool arg schemas), and `RepoInputSchema` with the `.refine()` cross-field check, also verbatim from the spec. `zod` was already a `packages/core` dependency from the initial scaffold, so no dependency addition was needed. Test runner: used Node's built-in `node --test` against `.ts` sources directly (Node 24 strips types natively) instead of adding a test-runner dependency (Jest/Vitest), keeping in line with CLAUDE.md's minimal-tooling constraint; `packages/core/tsconfig.json` now excludes `src/__tests__` from the `tsc` build so test sources aren't emitted into `dist`. Ran the auto-lint skill: merged the skill's baseline import-sort/hygiene/no-console/no-explicit-any rules into the existing root `.eslintrc.json` (additive only, nothing overwritten) and added `eslint-plugin-import` + `eslint-plugin-simple-import-sort` as root devDependencies; this repo-wide config change surfaced one pre-existing mechanical fix (`packages/web/vite.config.ts` import order), which was auto-fixed. **Deviations:** (1) test file placed at `packages/core/src/__tests__/schemas.test.ts` per CLAUDE.md's Code Style Rules convention, not the literal `src/tests/` path given in the prompt. (2) The GitHub URL regex in `RepoInputSchema` trips ESLint's `no-useless-escape` on the escaped hyphen (`\-`); per explicit instruction the regex was kept byte-for-byte as specified and the rule was suppressed inline with `eslint-disable-next-line` rather than the escape being removed.
-**Tests Added:** `packages/core/src/__tests__/schemas.test.ts` — valid/invalid `FileSummary` (including >50-item array rejection), valid/invalid `github` and `local` `RepoInput` cases. All 6 pass; full monorepo `build`/`test`/`lint` verified green.
+### Goal
+Implement the shared TypeScript interfaces and Zod schemas from ARCHITECTURE.md Section 6 in packages/core, with test coverage for the validation boundaries.
+
+### User Prompt
+Read ARCHITECTURE.md Section 6 (Shared TypeScript Interfaces & Zod Schemas).
+
+Implement packages/core/src/types.ts with EXACTLY these interfaces, verbatim as specified in ARCHITECTURE.md: RepoInput, RepoMeta, FileNode, 
+Symbol, FileSummary, SynthesisResult, AuditEntry, AgentDecision, 
+DeepDiveSession, InvestigationResult. Every field must have an explicit type — no `any`.
+
+Implement packages/core/src/schemas.ts with Zod schemas: 
+FileSummarySchema, AgentDecisionSchema, ToolArgsSchemas (an object with 5 keys matching the 5 agent tools: read_file, search_code, 
+list_directory, get_file_summary, find_references), and RepoInputSchema with a .refine() ensuring path is required for 'local' type and url is 
+required for 'github' type.
+
+Add packages/core/package.json dependency: zod.
+
+Write packages/core/src/tests/schemas.test.ts covering:
+- Valid FileSummary passes validation
+- FileSummary with oversized arrays (>50 items) fails validation
+- Valid github RepoInput passes, missing url fails
+- Valid local RepoInput passes, missing path fails
+
+Run auto-lint skill. Append entry to prompts.md
+
 ---
 
-## [2026-07-30 12:50] Task: Standardize monorepo testing stack on Vitest
+## Standardize monorepo testing stack on Vitest
 
-**Goal:** Replace Node's built-in `node --test` runner with Vitest across all four workspaces, and expand `packages/core`'s schema test coverage to exercise every validation branch (required fields, type mismatches, boundary lengths, regex edge cases, defaults, unknown-key stripping).
-**Files Changed:** `package.json`, `package-lock.json`, `packages/core/package.json`, `packages/cli/package.json`, `packages/api/package.json`, `packages/web/package.json`, `packages/core/src/__tests__/schemas.test.ts`
-**How It Was Achieved:** Added `vitest@^4.1.10` as a single root devDependency (relies on npm workspaces hoisting — each workspace resolves it via the ancestor `node_modules/.bin` PATH that `npm run` sets up, verified by running `vitest run` successfully from each of the four workspace directories, so no per-package `vitest` devDependency duplication was needed). Set each workspace's `test` script to `vitest run --passWithNoTests` (the flag matters for `cli`/`api`/`web`, which have zero test files today — Vitest exits 1 on an empty suite otherwise) and added a `test:watch` script (`vitest`) per the prompt's watch-mode request. Rewrote `packages/core/src/__tests__/schemas.test.ts` from `node:test`/`node:assert` to Vitest's `describe`/`it`/`expect`, dropping the `.ts` import-extension workaround the old Node-native runner required (Vitest resolves extensionless relative imports normally). Expanded from 6 to 59 test cases covering: every required-field-missing and wrong-type branch on `FileSummarySchema`, exact boundary values for all three length constraints (500/1000/100-char strings, 50-item arrays) on both the pass and fail side, empty-array and unknown-key-stripping behavior; every branch of `AgentDecisionSchema` including the documented absence of a tool_call/toolName cross-field constraint; all 5 `ToolArgsSchemas` entries including `search_code`'s default-value branch; and `RepoInputSchema`'s enum/refine/regex branches (malformed URLs, `.git`-suffix boundary, type/field mismatches, optional `pat`). Checked `CLAUDE.md` for `node:test`/`node --test` references per the prompt's first instruction — found none (the runner choice was never documented there, only decided in a prior session), so no doc edit was needed there. **Deviations:** (1) CLAUDE.md Section 5 requires stopping to flag any task touching >3 files or adding a dependency outside Section 1's locked stack — this task does both; flagged to the user before starting, who confirmed proceeding as one task. (2) `vitest` was added once at the root rather than duplicated into each workspace's `package.json`, since workspace hoisting already makes it resolvable everywhere — noted as "where needed" per the prompt's own wording. (3) No coverage-measurement tool (`@vitest/coverage-v8`) was added — "maximum possible branch coverage" was interpreted as exhaustive hand-written test cases per schema branch, not a measured coverage percentage, to avoid adding a dependency not requested or required by CLAUDE.md's minimal-tooling stance.
-**Tests Added:** `packages/core/src/__tests__/schemas.test.ts` expanded from 6 to 59 cases (see above). All 59 pass; `cli`/`api`/`web` correctly report zero tests with exit code 0; full monorepo `build`/`test`/`lint` verified green.
+### Goal
+Replace Node's native test runner with Vitest across every workspace, refactor and expand existing tests for maximum branch coverage, verify tests/lint pass, and generate a session context summary.
+
+### User Prompt
+I want to standardize our testing stack across the entire monorepo to use Vitest instead of Node's native test runner (`node:test`).
+
+Please perform the following tasks:
+
+1. **Update Documentation & Configs**:
+   - Check `CLAUDE.md` and replace any references to `node:test` or `node --test` with `vitest`.
+   - Update `package.json` files (root and workspaces) to include `vitest` as a devDependency where needed.
+   - Configure/update test scripts across workspaces to run `vitest run` (for single runs) or `vitest` (for watch mode).
+
+2. **Refactor Existing Tests**:
+   - Refactor all existing test files (e.g., in `packages/core/src/__tests__/` and any other packages) from `node:test` syntax to `vitest` syntax (`describe`, `it`, `expect`, `vi`).
+   - Expand the test cases to achieve maximum possible branch coverage for all Zod schemas, types, and logic implemented so far. Cover edge cases, invalid payloads, missing required fields, and boundary conditions.
+
+3. **Verification**:
+   - Run `npm run test` across all workspaces to ensure every Vitest test passes without errors.
+   - Run `npm run lint` to confirm code style and linting standards are maintained.
+
+4. **Context Summary Generation**:
+   - After successfully converting and passing the tests, generate a concise, high-density **Session Context Summary** in markdown format. 
+   - The summary should capture:
+     1. Current monorepo architecture and package state (`core`, `cli`, `api`, `web`).
+     2. All key schema and domain model decisions made so far.
+     3. Active branch name and recent PR/git history.
+     4. Current test setup and coverage status.
+   - This summary will be used to initialize new LLM sessions efficiently while conserving context tokens.
+
 ---
 
-## [2026-07-30 13:25] Task: Path traversal guard and LLM input sanitization
+## Path traversal guard and LLM input sanitization
 
-**Goal:** Implement `assertSafePath()`, `sanitizeForLLM()`, and `redactSecrets()` per PRD.md Section 5 and CLAUDE.md Section 4 rules 1/2/4/8, with dry-run test coverage before any real filesystem/LLM wiring exists.
-**Files Changed:** `packages/core/src/security/path-guard.ts`, `packages/core/src/security/sanitize.ts`, `packages/core/src/__tests__/security.test.ts`
-**How It Was Achieved:** `path-guard.ts` exports `assertSafePath(targetPath, sandboxRoot)`, which `realpathSync`s the sandbox root (defeating symlink-based sandbox redefinition), resolves the target, and — if the target doesn't exist yet — walks up to the nearest existing ancestor directory, `realpathSync`s that, and rejoins the missing segments, rather than only checking one parent level up; this generalization was needed because the literal "check the parent directory's realpath" approach throws a raw `ENOENT` (instead of the intended `'Path traversal blocked'`) whenever the immediate parent is also missing, which is the common case for multi-segment traversal payloads like `../../../etc/passwd` on a machine with no `/etc`. The resolved real path is then checked for a sandbox-root prefix (with a path-separator boundary check to prevent `..-suffix` sibling-directory false positives) and rejected with `throw new Error('Path traversal blocked')` on violation. `sanitize.ts` exports `sanitizeForLLM()` (8000-char truncation, then per-line neutralization of `/^(system|instruction|assistant|human):/i` prefixes into `[FILTERED]: `, trimming any whitespace the original prefix left behind so no double-space artifact appears) and `redactSecrets()` (global regex replace of both `ghp_[A-Za-z0-9]{36}` and `github_pat_[A-Za-z0-9_]{22,}` with `[REDACTED_TOKEN]`), per PRD.md's prompt-injection-mitigation and PAT-redaction requirements. Per CLAUDE.md's "dry-run before wet-run" rule, the test suite was written and run first — it caught both of the above bugs (the `ENOENT` traversal-detection gap and the sanitize double-space) before any other module was wired to call these functions. The symlink test creates a real Windows junction (via `fs.symlinkSync(..., 'junction')`) rather than a POSIX symlink, since this machine has no elevated privileges/Developer Mode and `symlinkSync` with `'dir'`/`'file'` types fails with `EPERM`; junctions require no elevation and `realpathSync` resolves them identically for the purpose of this check, with a POSIX `'dir'` symlink used instead when `process.platform !== 'win32'`. Neither new module was wired into `packages/core/src/index.ts`, consistent with `types.ts`/`schemas.ts` also not being exported there yet.
-**Tests Added:** `packages/core/src/__tests__/security.test.ts` — 17 new tests: `assertSafePath` allows an existing in-sandbox path, allows a not-yet-existing in-sandbox path (write case), blocks `../../../etc/passwd`-style traversal, and blocks a symlink/junction pointing outside the sandbox; `sanitizeForLLM` covers truncation at exactly 8000 chars, no-op on short content, neutralization of all 4 injection prefixes case-insensitively, and that non-prefixed lines are left untouched; `redactSecrets` covers both token formats individually, both in the same string, and a normal-text no-op case. All 76 tests in the package pass (59 existing + 17 new); full-repo lint clean (0 errors, same 4 pre-existing `no-console` warnings); `tsc` build verified clean.
+### Goal
+Implement assertSafePath(), sanitizeForLLM(), and redactSecrets() per PRD.md Section 5 and CLAUDE.md Section 4 rules 1/2/4/8, with full test coverage, then refresh SESSION_SUMMARY.md.
+
+### User Prompt
+Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
+Then,
+Read PRD.md Section 5 (Security & Data Handling) and CLAUDE.md 
+Section 4(Critical Constraints, rules 1, 2, 4, 8).
+
+Implement packages/core/src/security/path-guard.ts:
+- export function assertSafePath(targetPath: string, sandboxRoot: 
+string): string  Must resolve both paths absolutely, 
+use fs.realpathSync on sandboxRoot to  defeat symlink-based traversal, 
+verify the resolved target starts with the  resolved sandbox path, 
+throw new Error('Path traversal blocked') on violation,
+  and return the safe resolved path on success. Handle the case where 
+the target file doesn't exist yet (for write operations) by checking 
+the parent directory's realpath instead.
+
+Implement packages/core/src/security/sanitize.ts:
+- export function sanitizeForLLM(content: string): string
+  Truncate to 8000 characters. 
+Replace lines matching /^(system|instruction|assistant|human):/i with a neutralized prefix "[FILTERED]: ".
+- export function redactSecrets(text: string): string
+  Redact any substring matching /ghp_[A-Za-z0-9]{36}/ or
+  /github_pat_[A-Za-z0-9_]{22,}/ with "[REDACTED_TOKEN]". This function must be called before ANY console.log or logger call anywhere PAT 
+values might appear.
+
+Write packages/core/src/__tests__/security.test.ts covering:
+- assertSafePath blocks ../../../etc/passwd style traversal
+- assertSafePath blocks a symlink pointing outside the sandbox 
+(create a real symlink in a temp fixture dir for this test)
+- assertSafePath allows legitimate paths inside the sandbox
+- sanitizeForLLM truncates long content and neutralizes injection 
+patterns
+- redactSecrets correctly redacts both PAT formats and leaves normal 
+text untouched
+
+Run auto-lint skill. Append entry to prompts.md. And in the end overwrite the content of `SESSION_SUMMARY.md` file and give the summary for the context of the current session and progress of the project.
+
 ---
 
-## [2026-07-30 15:14] Task: Sandbox directory lifecycle manager
+## Sandbox directory lifecycle manager
 
-**Goal:** Implement `createSandbox()`, `cleanupSandbox()`, and `getSandboxSizeBytes()` in `packages/core/src/ingestion/sandbox-manager.ts` per CLAUDE.md Section 4 rule 1 (temp clone dirs must always be deleted on completion/session end, cleanup wrapped in try/finally so it runs even on error paths).
-**Files Changed:** `packages/core/src/ingestion/sandbox-manager.ts`, `packages/core/src/__tests__/sandbox-manager.test.ts`
-**How It Was Achieved:** `createSandbox()` synchronously creates and returns `path.join(os.tmpdir(), 'sleuth', crypto.randomUUID())` via `fs.mkdirSync(..., { recursive: true })`, giving each caller a fresh collision-free directory. `cleanupSandbox()` awaits `fs.promises.rm(sandboxPath, { recursive: true, force: true })` inside a try/catch that never rethrows — on failure it only `console.warn`s a message built from `redactSecrets(sandboxPath)` (defense in depth per rule 4, in case a future caller ever composes the sandbox path from a URL segment that could carry a token) rather than the raw path. `getSandboxSizeBytes()` recursively walks the directory with `fs.readdirSync(..., { withFileTypes: true })`, summing `fs.statSync(...).size` for files and recursing into subdirectories, for the upcoming 100MB clone-size cap check. This is the first module in `packages/core/src/ingestion/`. Ran the auto-lint skill: `npx eslint --fix` on both new files reformatted the test file only (inserted blank lines before certain statements per the existing repo-wide spacing rule) — zero errors remained after.
-**Tests Added:** `packages/core/src/__tests__/sandbox-manager.test.ts` — 4 tests: `createSandbox` produces a real, empty, writable directory; `cleanupSandbox` removes a populated sandbox completely; `cleanupSandbox` resolves without throwing when given a path that was never created; `getSandboxSizeBytes` sums a 3-level nested fixture directory (10 + 25 + 5 = 40 bytes) to the exact expected total. All 4 pass; full `packages/core` suite verified at 80/80 passing (76 existing + 4 new); lint clean on the touched files.
+### Goal
+Implement createSandbox(), cleanupSandbox(), and getSandboxSizeBytes() per CLAUDE.md Section 4 rule 1, guaranteeing temp clone directories are always cleaned up.
+
+### User Prompt
+Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
+Then,
+Read CLAUDE.md Critical Constraint rule 1 
+(always delete temp clone dirs).
+
+Implement packages/core/src/ingestion/sandbox-manager.ts:
+- export function createSandbox(): string
+  Creates a directory at path.join(os.tmpdir(), 'sleuth', 
+crypto.randomUUID()) using fs.mkdirSync with { recursive: true }. 
+Returns the absolute path.
+- export async function cleanupSandbox(sandboxPath: string): 
+Promise<void>
+  Deletes the directory recursively via fs.promises.rm(sandboxPath,
+  { recursive: true, force: true }). Must NEVER throw — wrap in 
+try/catch and console.warn on failure (use redactSecrets on any logged 
+path just in case, for defense in depth).
+- export function getSandboxSizeBytes(sandboxPath: string): number
+  Recursively sums file sizes under sandboxPath 
+(used later for the 100MB clone size cap).
+
+Write packages/core/src/__tests__/sandbox-manager.test.ts covering:
+- createSandbox creates a real, empty, writable directory
+- cleanupSandbox removes it completely
+- cleanupSandbox does not throw when called on a non-existent path
+- getSandboxSizeBytes correctly sums a fixture directory with known 
+file sizes
+
+Run auto-lint skill. Append entry to prompts.md
+
 ---
 
-## [2026-07-30 16:22] Task: GitHub clone and local folder ingestion
+## Repo ingestion — GitHub clone and local folder ingestion
 
-**Goal:** Implement `cloneRepo()` (GitHub URL validation, PAT-based auth, shallow clone, 100MB size cap) and `ingestLocal()` (folder copy excluding `node_modules`/`.git`, git or synthetic commit hash) per PRD.md Section 4.1/5 and CLAUDE.md Section 4 rules 1/2/4, with mocked dry-run tests before any real network/filesystem exercise.
-**Files Changed:** `packages/core/src/ingestion/clone.ts`, `packages/core/src/ingestion/local.ts`, `packages/core/src/__tests__/ingestion.test.ts`
-**How It Was Achieved:** `clone.ts` validates the URL against the literal `RepoInputSchema` regex (with the same `no-useless-escape` suppression precedent as `schemas.ts`), builds the authenticated clone URL via `new URL(url).username = pat` (never string concatenation), calls `simpleGit().clone(cloneUrl, targetDir, ['--depth', '1', '--single-branch'])`, then enforces the 100MB cap via the existing `getSandboxSizeBytes()`/`cleanupSandbox()` from `sandbox-manager.ts` before reading `HEAD` via `revparse()`. All caught clone errors pass through `toClearError()`, which `redactSecrets()`s the message *before* any pattern matching or reuse, then maps to one of `'Repository not found'` / `'Authentication failed — check your token'` / `'Network error'` / a redacted generic fallback — the raw `pat` variable itself is never read inside the catch path at all, only the (already sanitized) error message. `local.ts` validates `sourcePath` exists and `statSync(...).isDirectory()`, then `cpSync(..., { recursive: true, filter })` with a filter that checks whether any path segment (split on `path.sep`) exactly equals `node_modules` or `.git` — a deviation from the prompt's literal `!src.includes('node_modules') && !src.includes('/.git/')` filter, needed because that substring/POSIX-separator form silently fails to exclude `.git` on Windows (backslash paths) and could false-positive on filenames merely containing the substring `node_modules`. Commit hash resolution: `simpleGit(sourcePath).revparse(['HEAD'])` if `sourcePath/.git` exists, else `sha256` of a newline-joined, sorted, recursively-collected relative file listing (directories excluded from the listing itself, same exclusion filter applied) for deterministic caching on non-git folders. **Deviations:** (1) `simple-git` was already a `packages/core` dependency (added in an earlier session, confirmed via `node_modules/simple-git/package.json` at `3.36.0`) — no dependency addition was actually needed despite the task instruction. (2) The `.git`-exclusion filter substring was generalized to a path-segment check as described above — flagged here as a correctness fix, not a stylistic choice.
-**Tests Added:** `packages/core/src/__tests__/ingestion.test.ts` — 7 tests, `simple-git` fully mocked (`vi.mock`, no real network/filesystem-git calls): `cloneRepo` clones a valid GitHub URL with the exact `--depth 1 --single-branch` args, rejects an invalid (non-GitHub) URL before `clone()` is ever called, and embeds a `ghp_`-format PAT into the authenticated clone URL while asserting the thrown error (`'Authentication failed — check your token'`) never contains the raw PAT string; `ingestLocal` excludes `node_modules` and `.git` from the copied tree, reads the commit hash via the mocked `revparse(['HEAD'])` when `.git` is present, generates a 64-hex-char synthetic sha256 hash when it isn't (asserting `revparse` was never called), and throws a clear error for a non-existent local path. All 7 pass; full `packages/core` suite verified at 87/87 passing (80 existing + 7 new); `tsc --noEmit` clean; repo-wide `npm run lint` clean (0 errors, same 4 pre-existing `no-console` warnings on placeholder entrypoints).
+### Goal
+Implement cloneRepo() (validated URL, PAT-safe auth via the URL object, 100MB size-cap enforcement) and ingestLocal() (folder copy with commit-hash derivation) per PRD.md Section 4.1/5.
+
+### User Prompt
+Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
+Then,
+Read PRD.md Section 4.1 and Section 5 (PAT Handling).
+
+Add dependency to packages/core: simple-git.
+
+Implement packages/core/src/ingestion/clone.ts:
+- export async function cloneRepo(url: string, pat: string | undefined,
+  targetDir: string): Promise<{ commitHash: string }>
+  Validate url against 
+/^https:\/\/github\.com\/[\w.\-]+\/[\w.\-]+(\.git)?$/
+  — throw a clear error if invalid. If pat is provided, construct an
+  authenticated URL using the URL object (set .username = pat) — NEVER
+  string concatenation. Use simpleGit().clone(authUrl, targetDir,
+  ['--depth', '1', '--single-branch']) — never child_process.exec. 
+After cloning, read the HEAD commit hash via simpleGit(targetDir).revparse(['HEAD']). Wrap errors into clear messages: 
+"Repository not found",
+  "Authentication failed — check your token", "Network error". Ensure 
+the `pat` variable is never included in any thrown error message or 
+logged anywhere (use redactSecrets defensively on any error text before logging).
+  Enforce a size cap: after clone, call getSandboxSizeBytes — if over
+  100MB, delete the sandbox and throw "Repository exceeds 100MB size 
+limit".
+
+Implement packages/core/src/ingestion/local.ts:
+- export async function ingestLocal(sourcePath: string, targetDir: string):
+  Promise<{ commitHash: string }>
+  Validate sourcePath exists and is a directory. Copy it into targetDir via
+  fs.cpSync(sourcePath, targetDir, { recursive: true, filter: (src) =>
+  !src.includes('node_modules') && !src.includes('/.git/') }). If a 
+.git folder exists in sourcePath, use simple-git to read the current 
+commit hash; otherwise generate a synthetic hash via sha256 of a sorted file listing (so caching still works deterministically for non-git 
+folders).
+
+Write packages/core/src/__tests__/ingestion.test.ts (mock simple-git,
+no real network calls):
+- Valid GitHub URL triggers clone with correct depth/branch args
+- Invalid URL is rejected before any clone attempt
+- PAT is correctly embedded in the clone URL but never appears in any
+  thrown error
+- Local folder ingestion correctly excludes node_modules and .git
+- Non-existent local path throws a clear error
+
+Run auto-lint skill. Append entry to prompts.md
+
 ---
 
-## [2026-07-30 17:40] Task: Deterministic framework/monorepo/package-manager detector
+## Deterministic framework detector
 
-**Goal:** Implement `detectFrameworks()` in `packages/core/src/analysis/framework-detector.ts` per PRD.md Section 4.2 and ARCHITECTURE.md's directory-tree note that this module must be 100% deterministic (pure file/JSON inspection, zero LLM calls) — the first module in `packages/core/src/analysis/`.
-**Files Changed:** `packages/core/src/analysis/framework-detector.ts`, `packages/core/src/__tests__/framework-detector.test.ts`
-**How It Was Achieved:** `detectFrameworks(repoRoot)` reads `package.json` via `readFileSync`/`JSON.parse` wrapped so a missing or malformed file returns `undefined` rather than throwing (`existsSync` guard plus a `try/catch` around `JSON.parse`), then merges `dependencies`/`devDependencies` and checks for `next` (→ `'nextjs'`), `react` only when `next` is absent (→ `'react'`), `express` (→ `'express'`), `@nestjs/core` (→ `'nestjs'`), and `vite` (→ `'vite'`). Monorepo detection checks for `pnpm-workspace.yaml`/`lerna.json`/`turbo.json`/`nx.json` OR a truthy `package.json.workspaces` field; `workspaceDirs` is only populated when `isMonorepo` is true, filtering the fixed candidate list (`apps`, `packages`, `libs`, `shared`) down to those that actually exist as directories (`existsSync` + `statSync(...).isDirectory()`, not just `existsSync`, so a same-named file wouldn't be misreported as a workspace dir). Package manager is resolved by lockfile precedence: `pnpm-lock.yaml` > `yarn.lock` > default `'npm'` (no `package-lock.json` check needed since it's the same as the default). Every internal branch is pure synchronous `fs`/`JSON` inspection — no LLM/network/async code anywhere in the module, matching the interface exactly as specified (`FrameworkProfile` with `frameworks`, `packageManager`, `isMonorepo`, `workspaceDirs`). No deviations from the given spec.
-**Tests Added:** `packages/core/src/__tests__/framework-detector.test.ts` — 9 tests using real temp fixture directories (`mkdtempSync`, no mocking needed since the module is pure `fs`/`JSON`): pure React app, Next.js app (asserting `react` is *not* also reported), Express API, NestJS API, a pnpm monorepo with `pnpm-workspace.yaml` + `pnpm-lock.yaml` + real `apps/`/`packages/` directories, monorepo detection via `package.json.workspaces` alone (with a non-existent candidate dir correctly excluded from `workspaceDirs`), yarn-lockfile package-manager detection, a repo root that doesn't exist at all (must not throw — returns the fully-empty/default profile), and a malformed (unparseable) `package.json` (must not throw — falls back to empty frameworks and non-monorepo). All 9 pass; full `packages/core` suite verified at 96/96 passing (87 existing + 9 new); `tsc --noEmit` clean; lint clean on both new files (0 errors).
+### Goal
+Implement detectFrameworks() to identify frameworks, package manager, and monorepo status from package.json and lockfiles, 100% deterministic with zero LLM calls.
+
+### User Prompt
+Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
+Then,
+Read PRD.md Section 4.2 and ARCHITECTURE.md's note that this module 
+must be 100% deterministic — zero LLM calls.
+
+Implement packages/core/src/analysis/framework-detector.ts:
+- export interface FrameworkProfile { frameworks: string[]; packageManager:
+  'npm' | 'yarn' | 'pnpm'; isMonorepo: boolean; workspaceDirs: string[]; }
+- export function detectFrameworks(repoRoot: string): FrameworkProfile
+  Read package.json (handle missing/malformed file gracefully — return
+  empty frameworks array, never throw). Check dependencies + devDependencies:
+  'next' present — push 'nextjs'; 'react' present AND 'next' absent — push
+  'react'; 'express' — push 'express'; '@nestjs/core' — push 'nestjs';
+  'vite' — push 'vite'. Detect monorepo via existence of
+  pnpm-workspace.yaml, lerna.json, turbo.json, nx.json, OR package.json
+  having a "workspaces" field. If monorepo, check which of apps/, packages/,
+  libs/, shared/ exist as top-level directories and include only existing
+  ones in workspaceDirs. Detect packageManager by lockfile precedence:
+  pnpm-lock.yaml > yarn.lock > package-lock.json > default 'npm'.
+
+Write packages/core/src/__tests__/framework-detector.test.ts with fixture
+package.json objects (write temp fixture dirs) covering: pure React app,
+Next.js app, Express API, NestJS API, a pnpm monorepo with apps/ and
+packages/, and a repo with no package.json at all (must not throw).
+
+Run auto-lint skill. Append entry to prompts.md
+
 ---
 
-## [2026-07-31 11:00] Task: Deterministic file discovery and ignore-rule engine
+## Gitignore-aware file discovery and content caching
 
-**Goal:** Implement `discoverFiles()` in `packages/core/src/analysis/discovery.ts` per PRD.md Section 4.3 (respect `.gitignore`, hardcoded folder/file/test/binary exclusions, never follow symlinks, null-byte binary detection, 1500-file hard cap, 500KB per-file size cap), returning both the `FileNode[]` list and a `Map<string, string>` content cache so later pipeline stages never re-read from disk.
-**Files Changed:** `packages/core/package.json`, `package-lock.json`, `packages/core/src/analysis/discovery.ts`, `packages/core/src/__tests__/discovery.test.ts`
-**How It Was Achieved:** Added `ignore@^5.3.2` as an explicit `packages/core` dependency (it was already present in `package-lock.json` as a transitive dev-only dependency of `eslint`, so `npm install --workspace=@sleuth/core` only flipped its lockfile entry from `dev: true` to a real production resolution — no new package downloaded). `discoverFiles(repoRoot, auditLog)` builds one `ignore` matcher combining the hardcoded folder list (`node_modules`, `.git`, `dist`, `build`, `coverage`, `.cache`, `.next`, `__pycache__`, `generated`, `snapshots`, `__snapshots__`, `cypress`, `e2e`), lockfile/binary-extension file patterns, test-file patterns (`*.test.*`, `*.spec.*`, `__tests__/`, `*.snap`), and the repo's own `.gitignore` content if present — gitignore-style patterns naturally match at any depth and directory patterns (checked with a trailing `/`) let the walker prune whole subtrees without recursing into them. The recursive walker uses `readdirSync(..., { withFileTypes: true })` (entries sorted by name for deterministic output), calls `lstatSync` on every entry and skips (never recurses into) anything where `isSymbolicLink()` is true, then checks the ignore matcher before deciding to recurse (directories) or evaluate as a candidate file. Each surviving candidate file is checked against the 500KB size cap (from the already-available `lstatSync` size, no extra `statSync` call), then binary-sniffed via a partial `openSync`/`readSync` of only the first 512 bytes checked for a `0x00` byte (not a full-file read) — only files passing both checks get their full content read via `readFileSync` and stored in the content cache keyed by forward-slash relative path. The 1500-file cap is enforced at the top of each directory's entry loop (checking `files.length`, not a separate counter) so recursion unwinds immediately once hit, and a `capped` flag ensures the "Discovery capped..." warning `AuditEntry` is pushed at most once; a final summary `AuditEntry` (`"Discovered {n} files, skipped {m} ignored/binary/oversized"`) is always pushed. **No deviations from the given spec** — binary extensions, lockfile names, and test patterns were kept exactly as listed rather than extended (e.g. `.jpeg` was deliberately not added alongside `.jpg` since it wasn't in the given list).
-**Tests Added:** `packages/core/src/__tests__/discovery.test.ts` — 2 tests using a real temp fixture directory (`mkdtempSync`, no mocking): (1) a combined fixture with normal source files (`src/index.ts`, `README.md`), a `.gitignore` excluding `ignored-folder/`, a non-extension-listed binary file (`asset.bin`) containing a real embedded null byte to specifically exercise the 512-byte-sniff fallback rather than the static extension list, a `node_modules` folder, a Windows junction (POSIX symlink on non-Windows) pointing at a directory outside the fixture root, and a 600KB oversized file — asserts the returned file list and content cache exactly include only the two source files plus the repo's own `.gitignore` (itself a valid non-excluded file) and exclude all six fixture hazards, and asserts the exact final audit-log summary string; (2) a 1600-file fixture asserting the result is hard-capped at exactly 1500 files and the capped-warning `AuditEntry` is present (given a 20s test timeout — Windows filesystem I/O for creating 1600 real files exceeds Vitest's 5s default). All 98 tests in the package pass (96 existing + 2 new); `tsc --noEmit` clean; lint clean on both new files after auto-lint's `simple-import-sort/imports` auto-fix reordered `discovery.ts`'s import block (external packages before Node builtins).
+### Goal
+Implement discoverFiles() — symlink-safe, binary/oversized-file-skipping, gitignore-respecting file discovery capped at 1500 files — returning FileNode[] plus a content cache per PRD.md Section 4.3.
+
+### User Prompt
+Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
+Then,
+Read PRD.md Section 4.3. Add dependency to packages/core: ignore.
+
+Implement packages/core/src/analysis/discovery.ts:
+- export function discoverFiles(repoRoot: string, auditLog: AuditEntry[]):
+  { files: FileNode[]; contentCache: Map<string, string> }
+  Parse .gitignore at repoRoot using the 'ignore' package. Hardcoded 
+folder exclusions: node_modules, .git, dist, build, coverage, .cache, 
+.next, __pycache__, generated, snapshots, __snapshots__, cypress, e2e. Hardcoded file exclusions: *.lock, package-lock.json, yarn.lock, 
+pnpm-lock.yaml, and binary extensions (png, jpg, gif, svg, ico, woff, 
+ttf, eot, mp3, mp4, zip, tar, gz, pdf, exe, dll, so). Hardcoded test 
+exclusions: *.test.*, *.spec.*, __tests__/, *.snap. Walk recursively 
+using fs.readdirSync with withFileTypes — use lstatSync and skip any 
+entry where isSymbolicLink() is true (never follow symlinks). For each candidate file, read the first 512 bytes and skip if a null byte (0x00)is found (binary detection). Enforce a hard cap: stop discovery at 1500files total — if the cap is  hit, push an AuditEntry warning: 
+"Discovery capped at 1500 files — analysis may be incomplete for very large repos". 
+While walking, read each surviving file's full content (respecting a 
+per-file 500KB size cap — skip larger files) into a Map<string, string> keyed by relative path, and return this alongside the FileNode[] list 
+so later stages never need to re-read from disk. Push a final 
+AuditEntry: "Discovered {n} files, skipped {m} ignored/binary/oversized".
+
+Write packages/core/src/__tests__/discovery.test.ts using a temp 
+fixture directory containing: normal source files, a .gitignore 
+excluding a specific subfolder, a binary file (write actual null bytes),a symlink pointing outside the fixture dir, a node_modules folder, and afile over 500KB. Assert the returned file list correctly excludes all ofthe above and the contentCache contains correct content for surviving 
+files.
+
+Run auto-lint skill. Append entry to prompts.md
+
 ---
 
-## [2026-07-31 12:11] Task: Regex-based import graph and symbol indexer
+## Import graph and symbol indexer
 
-**Goal:** Implement `buildImportGraph()` in `packages/core/src/analysis/import-graph.ts` and `indexSymbols()`/`buildSymbolIndex()` in `packages/core/src/analysis/symbol-indexer.ts` per ARCHITECTURE.md Section 4.2 (`ImportScore` term) and Section 8's documented MVP limitation (regex-based extraction, relative-import resolution only, no AST parsing, no path-alias resolution) — the remaining two modules in `packages/core/src/analysis/` before `prioritizer.ts`.
-**Files Changed:** `packages/core/src/analysis/import-graph.ts`, `packages/core/src/analysis/symbol-indexer.ts`, `packages/core/src/__tests__/import-graph.test.ts`, `packages/core/src/__tests__/symbol-indexer.test.ts`
-**How It Was Achieved:** `buildImportGraph(files, contentCache)` applies three regexes (`import ... from '...'`, `require('...')`, `import('...')`) against each known file's cached content, keeps only specifiers starting with `./` or `../` (bare specifiers/aliases are skipped per the Section 8 limitation), and resolves each against the importing file's directory using `node:path/posix` (paths are stored forward-slash-relative per `discovery.ts`'s convention) — trying the exact path first, then each of `.ts`/`.tsx`/`.js`/`.jsx` appended, then an `/index.{ext}` variant of each, against a `Set` built from the known `files` list. Resolved targets increment `inDegree` in a plain `Map`; unresolved specifiers are silently dropped (no throw). Because the algorithm only ever does one flat pass building a map — never a graph traversal/BFS/DFS over the resolved edges — a circular import (`a.ts` → `b.ts` → `a.ts`) cannot cause an infinite loop by construction, verified with a dedicated fixture test. `indexSymbols(filePath, content)` scans line-by-line (resetting each regex's `lastIndex` before every line, per the spec) for `export (async )?function`, `export class`, `export (default )?const`, and `export { ... }` (the last split on commas and trimmed, one `Symbol` per name), recording the 1-indexed line number for each match; `buildSymbolIndex(files, contentCache)` runs this across all files and accumulates a `symbolName → Array<{path, line}>` map so the same exported name from multiple files is retained as multiple locations rather than overwritten. **Deviation (bug found and fixed mid-task, not part of the original prompt):** the project's `tsconfig.base.json` has `noUncheckedIndexedAccess: true`, so raw `RegExpExecArray` indexing (`match[1]`, `match[2]`, etc.) types as `string | undefined` even for capture groups that are structurally guaranteed to be present — both files were rewritten to bind each capture to a local `const` and guard with an explicit `!== undefined` check (matching the codebase's existing defensive-check style in `discovery.ts`/`framework-detector.ts`) rather than using non-null assertions, resolving 4 real `tsc --noEmit` errors this introduced. **Deviation (auto-lint tooling bug worked around):** running `eslint --fix` against `symbol-indexer.ts` twice, independently, rewrote the type-only-imported `Symbol` (our own interface from `types.ts`) to lowercase `symbol` (TypeScript's unrelated built-in primitive type) everywhere it appeared, apparently because the linter's scope analysis resolves the type-position identifier `Symbol` to the ambient/global lib type instead of the local import when the names collide, misreports the import as unused, and applies an incorrect auto-fix — both mangled occurrences were manually reverted, and the import was aliased to `Symbol as SymbolInfo` throughout the file to remove the name collision at its root rather than fighting the auto-fixer indefinitely; confirmed clean (0 warnings) on a subsequent unfixed `eslint` pass. No other deviations — extension order (`.ts`/`.tsx`/`.js`/`.jsx`), the exact three import regexes, and the exact four symbol regexes were kept byte-for-byte as specified.
-**Tests Added:** `packages/core/src/__tests__/import-graph.test.ts` — 2 tests (in-memory `FileNode[]`/`contentCache` fixtures, no filesystem I/O needed): (1) resolves a static `from`-import, a `../`-parent import, a dynamic `import()`, and a `require()` forming a deliberate circular pair (`a.ts` ↔ `b.ts`) — asserting exact `inDegree` counts, that a bare specifier (`react`) and an unresolvable relative path (`./missing`) never appear as map keys, and that directory-index resolution (`./components/Button` → `.../Button/index.tsx`) works; (2) asserts `inDegree` correctly accumulates to 2 when two different files import the same target. `packages/core/src/__tests__/symbol-indexer.test.ts` — 3 tests: `indexSymbols` extracts all four symbol types with correct 1-indexed line numbers and correct comma-split/trim behavior on an `export { a, b, c }` block from one fixture string; returns `[]` for a file with no matching export patterns; `buildSymbolIndex` asserts a symbol name exported from two different files (`a.ts`, `b.ts`) accumulates both `{path, line}` locations rather than the second overwriting the first. All 103 tests in the package pass (98 existing + 5 new); `tsc --noEmit` clean; lint clean (0 errors, 0 warnings) on all four new/changed files.
+### Goal
+Implement buildImportGraph() (regex-based relative-import resolution with in-degree counts) and indexSymbols()/buildSymbolIndex() (exported-symbol extraction) per ARCHITECTURE.md Sections 4.2 and 8.
+
+### User Prompt
+Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
+Then,
+Read ARCHITECTURE.md Section 4.2 (ImportScore) and Section 8 
+(documented limitation: only relative imports resolved, no AST parsing).
+Implement packages/core/src/analysis/import-graph.ts:
+- export interface ImportGraph { inDegree: Map<string, number>; }
+- export function buildImportGraph(files: FileNode[], contentCache:
+  Map<string, string>): ImportGraph
+For each file's content, apply these regexes to find import specifiers:
+  /import\s+.*?\s+from\s+['"](.+?)['"]/g, /require\(\s*['"](.+?)['"]\s*\)/g,
+  /import\(\s*['"](.+?)['"]\s*\)/g. Only process specifiers starting 
+with  './' or '../' — skip everything else (bare specifiers, aliases). Resolve the relative path against the importing file's directory, 
+trying exact match first, then appending .ts/.tsx/.js/.jsx, then tryingan /index variant of each extension, against the known `files` list. 
+Increment inDegree for each successfully resolved target. 
+Return { inDegree }.
+
+Implement packages/core/src/analysis/symbol-indexer.ts:
+- export function indexSymbols(filePath: string, content: string): 
+Symbol[] Scan line-by-line for these patterns (reset regex lastIndex 
+per line): export (async )?function (\w+) — type 'function'; export 
+class (\w+) — type 'class'; export (default )?const (\w+) — type 
+'const'; export \{([^}]+)\} — type 'export' (split the captured group 
+on commas, trim each name, push one Symbol per name). Record the 
+1-indexed line number for each match.
+- export function buildSymbolIndex(files: FileNode[], contentCache:
+Map<string,string>): Map<string, Array<{path: string; line: number}>>
+Runs indexSymbols across all files and builds a symbolName → locations map for later citation lookups (multiple files may export the same name).
+
+Write packages/core/src/__tests__/import-graph.test.ts and
+symbol-indexer.test.ts with fixture files containing known import
+relationships (including a circular import — must not infinite loop)
+and known exports, asserting correct inDegree counts and correct
+{name, type, line} extraction respectively.
+
+Run auto-lint skill. Append entry to prompts.md
+
 ---
 
-## [2026-07-31 14:10] Task: Priority scoring engine (PathScore/ImportScore/EntryPointBonus)
+## Priority scoring algorithm and entry point detection
 
-**Goal:** Implement `prioritizeFiles()` and its scoring primitives in `packages/core/src/analysis/prioritizer.ts` per ARCHITECTURE.md Section 4 (`PriorityScore = PathScore + ImportScore + EntryPointBonus`), the final module needed in `packages/core/src/analysis/` before `pipeline.ts` becomes buildable.
-**Files Changed:** `packages/core/src/analysis/prioritizer.ts`, `packages/core/src/__tests__/prioritizer.test.ts`
-**How It Was Achieved:** `PATH_SCORE_RULES` is an ordered `Array<{ pattern: RegExp; score: number }>` covering ARCHITECTURE.md Section 4.1's five pattern-based tiers (Critical Anchors 100, Config & Docs 85, Backend/Frontend Core 70, Supporting Structure 55, Shared Tooling 40), each tier's example filenames/directories folded into one alternation regex per tier; `computePathScore(path)` returns the first matching rule's score or falls back to the documented Baseline of 20 when nothing matches — the Baseline row from the Section 4.1 table is implemented as this fallback rather than as a sixth always-matching regex entry, since a catch-all pattern in the array would make the function's own "or 20 as baseline" fallback path unreachable and untestable. `detectEntryPoints(files, contentCache)` checks each file's cached content for any of the five literal bootstrap signatures (`app.listen(`, `createServer(`, `ReactDOM.createRoot(`, `ReactDOM.render(`, `NestFactory.create(`) via `String.includes`, adding the path to a `Set` on any match. `scoreFile(file, importGraph, entryPoints)` sums `computePathScore(file.path)` with `Math.min(inDegree × 4, 40)` (reading `importGraph.inDegree`, `?? 0` for files with no importers) and a flat `+30` when the path is in the entry-points set. `prioritizeFiles(files, importGraph, entryPoints, auditLog, maxFiles = 150)` maps every file to `{ ...file, score }`, sorts descending by score, pushes one `AuditEntry` (`stage: 'prioritization'`) logging the top 20 `path (score)` pairs joined by commas, then returns the top `maxFiles` entries with `score` populated. No deviations from the given function signatures or formula.
-**Tests Added:** `packages/core/src/__tests__/prioritizer.test.ts` — 6 tests: `computePathScore('package.json')` is exactly 100; a synthetic test-file path (`src/foo.test.ts`) scores the 20 baseline, not an elevated tier; `detectEntryPoints` flags a file containing `app.listen(` and leaves an unrelated file untouched; `scoreFile` isolates the entry-point bonus as an exact `+30` delta between an entry-point path and the same path absent from the entry-points set; `scoreFile` on a file with `inDegree = 15` confirms the importScore is capped at 40 (not 60) by asserting the total equals baseline-pathScore(20) + 40 + 0; `prioritizeFiles` on a 3-file input truncated to `maxFiles = 2` confirms descending sort (`package.json` at 100 first), correct truncation, and that exactly one audit entry is pushed containing the expected `path (score)` substring. All 109 tests in the package pass (103 existing + 6 new); `tsc`/lint clean on both new files (auto-lint's `simple-import-sort/imports` fix reordered import groups only, no logic changes).
+### Goal
+Implement the exact tiered priority-scoring formula (computePathScore, detectEntryPoints, scoreFile, prioritizeFiles) from ARCHITECTURE.md Section 4, with full test coverage.
+
+### User Prompt
+Read ARCHITECTURE.md Section 4 (Complete Priority Scoring Formula 
+Mechanics) in full — implement it EXACTLY as specified, including the 
+tiered  PATH_SCORE_RULES table with all 6 tiers.
+
+Implement packages/core/src/analysis/prioritizer.ts:
+- const PATH_SCORE_RULES: Array<{ pattern: RegExp; score: number }>
+  exactly matching the 6-tier table from ARCHITECTURE.md Section 4.1.
+- export function computePathScore(path: string): number
+  Returns the score of the first matching rule, or 20 as baseline.
+- export function detectEntryPoints(files: FileNode[], contentCache:
+  Map<string,string>): Set<string>
+  Signature-based: checks each file's content for app.listen(,
+  createServer(, ReactDOM.createRoot(, ReactDOM.render(,
+  NestFactory.create( — adds the path to the set if any match.
+- export function scoreFile(file: FileNode, importGraph: ImportGraph,
+  entryPoints: Set<string>): number
+  Returns computePathScore(file.path) + Math.min((importGraph.inDegree.get(file.path) || 0) * 4, 40) + (entryPoints.has(file.path) ? 30 : 0).
+- export function prioritizeFiles(files: FileNode[], importGraph:
+  ImportGraph, entryPoints: Set<string>, auditLog: AuditEntry[], 
+maxFiles = 150): FileNode[] Scores every file, sorts descending by 
+score, pushes an AuditEntry logging the top 20 files with their scores,and returns the top maxFiles entries (each with its `score` field 
+populated).
+
+Write packages/core/src/__tests__/prioritizer.test.ts covering:
+- package.json scores exactly 100
+- A file matching an entry-point signature receives the +30 bonus
+- A test file (e.g. foo.test.ts, if it somehow reaches this stage) 
+scores at baseline, not elevated
+- A file imported by 15 others gets importScore capped at 40, not 60
+- prioritizeFiles correctly sorts descending and truncates to maxFiles
+
+Run auto-lint skill. Append entry to prompts.md
+
 ---
 
-## [2026-07-31 16:21] Task: Ad-hoc multi-package detection in framework-detector.ts
+## Ad-hoc multi-package (sub-project) framework detection
 
-**Goal:** Fix `detectFrameworks()` mis-profiling any repo split into independent sub-folders (e.g. `backend/`+`frontend/`, `client/`+`server/`) that each have their own `package.json` but aren't wired up via formal monorepo tooling (no `pnpm-workspace.yaml`/`turbo.json`/root `workspaces` field) — such repos previously came back as `frameworks: []`, `isMonorepo: false`, per PRD.md §4.2 and ARCHITECTURE.md §4.2. Sub-project folder names must not be hardcoded anywhere — detection must work for any top-level folder name.
-**Files Changed:** `packages/core/src/types.ts`, `packages/core/src/analysis/framework-detector.ts`, `packages/core/src/__tests__/framework-detector.test.ts`
-**How It Was Achieved:** Added `SubProjectProfile` (`rootRelativePath`, `frameworks`, `packageManager`, `entryPoints` — the last initialized to `[]` here since framework detection runs before file discovery/content-caching in the pipeline order, per ARCHITECTURE.md §7, so no file content exists yet to scan for entry-point signatures) to `types.ts`, and moved `FrameworkProfile` there too (previously locally defined in `framework-detector.ts`) so both the new `monorepoType: 'workspace' | 'ad-hoc' | 'none'` field and `subProjects: SubProjectProfile[]` are shared types; `RepoMeta` picked up the same two new fields alongside its existing `frameworks`/`isMonorepo`/`workspaceDirs`. Rewrote `detectFrameworks(repoRoot)`: it first checks for the existing formal monorepo markers (`pnpm-workspace.yaml`/`lerna.json`/`turbo.json`/`nx.json`/root `package.json.workspaces`) — if found, behavior is unchanged (`monorepoType: 'workspace'`, existing `apps`/`packages`/`libs`/`shared` candidate-dir detection for `workspaceDirs`, no nested scan). If no formal markers exist, it now does a depth-1 `readdirSync` scan of every top-level directory (skipping the same hardcoded exclusion names as `discovery.ts`'s `HARDCODED_DIR_EXCLUSIONS` — `node_modules`, `.git`, `dist`, `build`, `coverage`, etc.) for a `package.json` directly inside it, regardless of the directory's name, building one `SubProjectProfile` per package.json found (root's, if present, plus every nested one) via the existing framework-matching logic run independently per sub-project. Final `FrameworkProfile` fields are derived from the `subProjects` array: `frameworks` is the deduplicated union across all sub-projects, `monorepoType` is `'ad-hoc'` when more than one sub-project was found (and no formal markers), `isMonorepo` is `monorepoType === 'workspace' OR subProjects.length > 1`, `workspaceDirs` in the ad-hoc case is just each non-root sub-project's `rootRelativePath`, and `packageManager` falls back to the first sub-project's lockfile detection when there's no root `package.json`. A repo with zero `package.json` anywhere returns `frameworks: []`, `subProjects: []`, `monorepoType: 'none'` without throwing (`readdirSync`/`readPackageJsonAt` both wrapped to fail soft). **Deviation (necessary, not a scope creep):** one pre-existing test (`'handles a repo with no package.json at all without throwing'`) asserted the full returned object via `toEqual({...})` without the two new fields — since `RepoMeta`/`FrameworkProfile` gained `monorepoType`/`subProjects`, that whole-object equality would now fail on the added keys regardless of correctness, so its expected object was updated to include `monorepoType: 'none'` and `subProjects: []`; no other existing test needed changes (all others assert individual fields, and none of the existing fixtures create nested `package.json` files inside their `apps`/`packages` test directories, so the new ad-hoc scan path never fires for the pre-existing formal-workspace test cases). Scope was kept strictly to `types.ts` and `framework-detector.ts` as instructed — `prioritizer.ts`, `pipeline.ts` (which doesn't exist yet), and all other files were left untouched; per-sub-project entry-point attribution is an explicitly separate follow-up task, not part of this one.
-**Tests Added:** `packages/core/src/__tests__/framework-detector.test.ts` — 3 new tests: an ad-hoc multi-package fixture using `client`/`server` naming (deliberately not `backend`/`frontend`, to prove the fix isn't name-hardcoded) with `express` in `server/package.json` and `react`+`vite` in `client/package.json`, asserting the deduplicated `frameworks` union, `isMonorepo: true`, `monorepoType: 'ad-hoc'`, `workspaceDirs` containing both folder names, and exactly 2 `subProjects` each with the correct `rootRelativePath`/`frameworks`/empty `entryPoints`, plus explicit isolation checks (`server`'s profile has only `express`, not `react`/`vite`); a regression test confirming a single root-level `package.json` with no nested ones still produces `monorepoType: 'none'`, `isMonorepo: false`, and exactly one `subProjects` entry (the root `''` one) with the expected shape; an empty-repo test (an existing directory with no `package.json` anywhere, root or nested) confirming `frameworks: []`, `subProjects: []`, `monorepoType: 'none'`, `isMonorepo: false` without throwing. One existing test's assertions were updated per the deviation note above. All 112 tests in the package pass (109 existing + 3 new, none regressed); `tsc --noEmit` clean; lint clean on all three changed files (no auto-fixes needed).
+### Goal
+Extend detectFrameworks() to generically detect independent sub-projects — any folder name, each with its own package.json — when no formal monorepo tooling is wired up, exposing a per-sub-project breakdown.
+
+### User Prompt
+Read PRD.md and ARCHITECTURE.md Section 4.2 (Framework Detection) for context.
+
+CURRENT STATE: packages/core/src/analysis/framework-detector.ts currently 
+only reads a root-level package.json to detect frameworks. This means any 
+repository split into independent sub-folders (e.g. backend/ + frontend/, 
+or client/ + server/, or any other naming convention) where EACH folder 
+has its own package.json and is NOT wired up via formal monorepo tooling 
+(no pnpm-workspace.yaml, no turbo.json, no root "workspaces" field) is 
+currently mis-profiled as frameworks: [], isMonorepo: false.
+
+This task adds "ad-hoc multi-package" detection as a new capability. 
+Sub-project folder names must NOT be hardcoded anywhere (not "backend"/
+"frontend" specifically) — the detection must work generically for ANY 
+top-level folder name.
+
 ---
 
-## [2026-07-31 16:38] Task: Per-sub-project entry point attribution in detectEntryPoints()
+1. UPDATE packages/core/src/types.ts:
 
-**User Prompt:** Read PRD.md and ARCHITECTURE.md Sections 4 (Priority Scoring) and 4.2 (Framework Detection) for context, along with the prior fix that made detectFrameworks() detect ad-hoc multi-package repos (e.g. backend/ + frontend/, or client/ + server/, or any other generically-named top-level folders each containing their own package.json). ISSUE FOUND: While detectFrameworks() now correctly identifies multiple independent sub-projects and their individual frameworks, entry point detection (detectEntryPoints in prioritizer.ts) still returns a single FLAT, repo-wide Set<string> of entry point paths. This means we currently know "this repo has entry points at backend/server.ts AND frontend/src/main.tsx" but we do NOT know which entry point belongs to which sub-project. For a split repo, this distinction matters — the backend's runtime bootstrap and the frontend's runtime bootstrap are architecturally separate and must be documented/cited separately later (e.g. in ONBOARDING.md). IMPORTANT CONSTRAINT: Sub-project folder names are NOT guaranteed to be "backend"/"frontend" — the fix must work generically based on the already-detected subProjects list and their rootRelativePath values — do NOT hardcode any specific folder names anywhere in this fix. [Full spec covered: 1) update types.ts SubProjectProfile/RepoMeta — already done in the prior turn; 2) framework-detector.ts entryPoints: [] init — already done in the prior turn; 3) rewrite detectEntryPoints(files, contentCache, subProjects) to return { global, bySubProject } with root-vs-nested path-prefix attribution rules and a subProjects.length === 0 fallback; 4) pipeline.ts wiring — explicitly skipped per the user's follow-up note, pipeline.ts does not exist yet; 5) prioritizer.test.ts new cases for client/server isolation, single-project regression, and zero-subprojects edge case; 6) pipeline.test.ts; 7) manual-test-scoring.ts per-sub-project printing + sanity checks; 8) ARCHITECTURE.md doc update. Run lint --fix, full npm run test --workspaces, append prompts.md per the just-updated CLAUDE.md format (User Prompt line), and check/apply that new CLAUDE.md format.] NOTE: pipeline.ts does not exist yet — do NOT create or modify it in this task. skip step 4 of this prompt entirely for now.
-**Goal:** Make entry-point detection attribute each detected runtime-bootstrap file to its owning sub-project (not just a flat repo-wide set), so a split repo's backend and frontend entry points can later be cited separately in ONBOARDING.md, without hardcoding any folder-name convention.
-**Files Changed:** `packages/core/src/analysis/prioritizer.ts`, `packages/core/src/__tests__/prioritizer.test.ts`, `packages/core/manual-test-scoring.ts`, `ARCHITECTURE.md`
-**How It Was Achieved:** Confirmed `types.ts` (`SubProjectProfile.entryPoints`, `RepoMeta.monorepoType`/`subProjects`) and `framework-detector.ts` (`entryPoints: []` on every `SubProjectProfile`) already matched the spec exactly from the prior ad-hoc-detection turn — no changes needed there. Rewrote `detectEntryPoints(files, contentCache, subProjects)` in `prioritizer.ts` to return `{ global: Set<string>; bySubProject: Map<string, string[]> }`: a new `scanForEntryPointSignatures()` helper holds the unchanged signature-matching loop; a new `belongsToSubProject()` helper attributes each file to its owning sub-project by path-prefix match against non-root `rootRelativePath` values, with the root (`''`) sub-project claiming any file that isn't claimed by another sub-project's prefix (so nested sub-project files are never double-counted under the root); when `subProjects.length === 0` (no `package.json` anywhere), it falls back to a single implicit whole-repo scan with an empty `bySubProject` map. `global` is built as the flattened union of every `bySubProject` array, and continues to feed `scoreFile()`'s existing flat `+30` `EntryPointBonus` unchanged — `scoreFile()` and `prioritizeFiles()` required zero code changes since they already only depended on a `Set<string>`. Updated `manual-test-scoring.ts`'s call site to destructure `{ global, bySubProject }`, mutate `frameworkProfile.subProjects[i].entryPoints` from `bySubProject` immediately afterward (mirroring the write-back the real `pipeline.ts` orchestrator will perform once built — framework detection runs before discovery per ARCHITECTURE.md §7, so this can only happen after file contents exist), and added a new "Sub-Projects" printed section (rootRelativePath, frameworks, packageManager, entryPoints, with a `⚠️` warning line for any sub-project with zero entry points) plus a sanity check for `subProjects.length > 1` asserting at least one sub-project has a non-empty `entryPoints` array and reporting how many have zero as an informational (non-failing) count. Extended `ARCHITECTURE.md` §4.3 with a new "Ad-Hoc Multi-Package Detection & Per-Sub-Project Entry Points" subsection covering both the prior ad-hoc-detection fix (never documented in ARCHITECTURE.md before now) and this turn's per-sub-project attribution, plus the framework-detection-before-discovery ordering note. **Deviations, both flagged inline rather than silently assumed:** (1) step 4 (`pipeline.ts` wiring) was skipped per the user's own explicit follow-up note, since `pipeline.ts` doesn't exist yet. (2) Step 6 (`pipeline.test.ts` exercising a full `runPipeline()` call) has the identical blocking dependency — `runPipeline()` doesn't exist either — but the user's skip note only named step 4; rather than fabricating a test against a nonexistent function or silently dropping the requirement, this was called out directly and step 6 was skipped for the same reason as step 4, to be picked up once `pipeline.ts` is built. (3) The task's step 8 asked to "extend the subsection added in the previous fix" documenting ad-hoc detection in `ARCHITECTURE.md` — no such subsection actually existed (the prior turn's task never included an `ARCHITECTURE.md` update), so a new subsection covering both fixes was created rather than an extension of a nonexistent one. Also applied the user's already-in-place `CLAUDE.md` edit (a new `**User Prompt:**` line in the `prompts.md` template, found via `git diff CLAUDE.md` showing it as a locally modified, uncommitted change) to this entry — no further `CLAUDE.md` edits were needed since that was the only change the diff showed.
-**Tests Added:** `packages/core/src/__tests__/prioritizer.test.ts` — 3 tests replacing/extending the old 2-arg `detectEntryPoints` test: a single-project regression test (`subProjects = [{ rootRelativePath: '', ... }]`) confirming entry points still land in `global` and under `bySubProject.get('')`; a `client`/`server` isolation test (deliberately not `backend`/`frontend`) confirming `bySubProject.get('server')` contains only `server/index.ts`, `bySubProject.get('client')` contains only `client/src/main.tsx`, `global` contains both, and `server`'s array explicitly does NOT contain the client's entry point; a zero-sub-projects edge case confirming the whole-repo fallback scan still populates `global` correctly with an empty `bySubProject` map. All 114 tests in the package pass (112 existing + 3 new − 1 old test replaced in place = net +2 test count from the raw file diff, 114 total, none regressed — explicitly re-verified `framework-detector.test.ts` (12 tests) and `prioritizer.test.ts` (8 tests) together, both green); `tsc --noEmit` clean; lint clean on all three changed source/test files (only pre-existing, expected `no-console` warnings on the diagnostic script, 0 errors).
+Add a new interface:
+
+  export interface SubProjectProfile {
+    rootRelativePath: string;  // e.g. "backend", "client", "" for root
+    frameworks: string[];
+    packageManager: 'npm' | 'yarn' | 'pnpm';
+    entryPoints: string[];     // populated later by prioritizer.ts — 
+                                 // initialize as [] here
+  }
+
+Update FrameworkProfile to:
+
+  export interface FrameworkProfile {
+    frameworks: string[];              // deduplicated union across all sub-projects
+    packageManager: 'npm' | 'yarn' | 'pnpm';
+    isMonorepo: boolean;
+    monorepoType: 'workspace' | 'ad-hoc' | 'none';
+    workspaceDirs: string[];
+    subProjects: SubProjectProfile[];
+  }
+
+Update RepoMeta to add these same new fields (monorepoType, subProjects) 
+alongside its existing frameworks/isMonorepo/workspaceDirs fields.
+
+---
+
+2. REWRITE packages/core/src/analysis/framework-detector.ts:
+
+detectFrameworks(repoRoot: string): FrameworkProfile must now:
+
+a) Keep existing logic for FORMAL monorepo markers at root 
+   (pnpm-workspace.yaml, lerna.json, turbo.json, nx.json, or root 
+   package.json "workspaces" field). If found, set monorepoType = 
+   'workspace' and keep existing apps/packages/libs/shared detection for 
+   workspaceDirs.
+
+b) NEW — if no formal markers exist: scan every top-level directory 
+   (depth 1 only, excluding node_modules/.git/dist/build/coverage/.cache 
+   and other standard ignored folders) for a package.json directly inside 
+   it. Do this for EVERY directory name found — do not hardcode any 
+   specific names.
+
+c) For the root package.json (if it exists) AND every nested one found 
+   in (b), run the existing framework-matching logic (next, react, 
+   express, @nestjs/core, vite dependency checks) independently, 
+   producing one SubProjectProfile per package.json found, with 
+   entryPoints initialized to [].
+
+d) Compute final FrameworkProfile fields:
+   - frameworks: deduplicated union of all frameworks across every subProject
+   - isMonorepo: true if monorepoType === 'workspace' OR subProjects.length > 1
+   - monorepoType: 'workspace' if formal markers found, else 'ad-hoc' if 
+     subProjects.length > 1, else 'none'
+   - workspaceDirs: for the ad-hoc case, each subProject's rootRelativePath 
+     (excluding the root "" entry)
+   - packageManager: from root's lockfile if root package.json exists, 
+     else from the first subProject found
+   - subProjects: the array built in (c)
+
+e) Handle a repo with NO package.json anywhere (root or nested) 
+   gracefully: return frameworks: [], subProjects: [], monorepoType: 
+   'none', without throwing.
+
+---
+
+3. UPDATE packages/core/src/__tests__/framework-detector.test.ts:
+
+Add a fixture-based test using "client"/"server" naming (deliberately 
+NOT "backend"/"frontend", to prove genericness):
+
+  fixture-root/
+    server/
+      package.json  (dependencies: { express: "^4.0.0" })
+    client/
+      package.json  (dependencies: { react: "^18.0.0", vite: "^5.0.0" })
+
+Assert: frameworks contains 'express', 'react', 'vite'; isMonorepo === 
+true; monorepoType === 'ad-hoc'; workspaceDirs contains 'server' and 
+'client'; subProjects.length === 2 with correct rootRelativePath values 
+and each entryPoints === [].
+
+Add a regression test confirming a single root-level package.json (no 
+nested ones) still produces monorepoType: 'none', isMonorepo: false, 
+subProjects.length === 1 (just the root entry) — exactly matching prior 
+single-project behavior.
+
+Add a test confirming zero package.json anywhere produces an empty, 
+non-throwing result.
+
+---
+
+Run lint --fix. Run the full test suite (npm run test --workspaces) and 
+confirm no regressions in framework-detector tests. Append an entry to 
+prompts.md per the CLAUDE.md format. Do NOT touch prioritizer.ts, 
+pipeline.ts, or any other file in this task — this is scoped strictly to 
+framework-detector.ts and types.ts.
+
+---
+
+## Per-sub-project entry point attribution
+
+### Goal
+Make detectEntryPoints() sub-project-aware so each detected sub-project gets its own correctly attributed entry points instead of one ambiguous flat list, generically via rootRelativePath (no hardcoded folder names).
+
+### User Prompt
+Read PRD.md and ARCHITECTURE.md Section 4.2 (Framework Detection) for context, along with the prior fix that made 
+detectFrameworks() detect ad-hoc multi-package repos (e.g. backend/ + 
+frontend/, or client/ + server/, or any other generically-named top-level 
+folders each containing their own package.json).
+
+ISSUE FOUND: While detectFrameworks() now correctly identifies multiple 
+independent sub-projects and their individual frameworks, entry point 
+detection (detectEntryPoints in prioritizer.ts) still returns a single 
+FLAT, repo-wide Set<string> of entry point paths. This means we currently 
+know "this repo has entry points at backend/server.ts AND 
+frontend/src/main.tsx" but we do NOT know which entry point belongs to 
+which sub-project. For a split repo, this distinction matters — the 
+backend's runtime bootstrap and the frontend's runtime bootstrap are 
+architecturally separate and must be documented/cited separately later 
+(e.g. in ONBOARDING.md: "To run the backend: ... entry point 
+backend/server.ts [backend/server.ts:12]. To run the frontend: ... entry 
+point frontend/src/main.tsx [frontend/src/main.tsx:5]").
+
+IMPORTANT CONSTRAINT: Sub-project folder names are NOT guaranteed to be 
+"backend"/"frontend" — they could be "client"/"server", "api"/"web", 
+"apps/api"/"apps/dashboard", or any other naming convention. The fix must 
+work generically based on the ALREADY-DETECTED subProjects list (from the 
+prior fix) and their rootRelativePath values — do NOT hardcode any 
+specific folder names anywhere in this fix.
+
+Fix as follows:
+
+---
+
+1. UPDATE packages/core/src/types.ts:
+
+Update SubProjectProfile to add a new field:
+
+  export interface SubProjectProfile {
+    rootRelativePath: string;
+    frameworks: string[];
+    packageManager: 'npm' | 'yarn' | 'pnpm';
+    entryPoints: string[];   // NEW — populated after discovery, relative 
+                              // to repo root, e.g. "backend/server.ts"
+  }
+
+Update RepoMeta to add:
+
+  export interface RepoMeta {
+    name: string;
+    identifier: string;
+    commitHash: string;
+    rootPath: string;
+    frameworks: string[];
+    isMonorepo: boolean;
+    monorepoType: 'workspace' | 'ad-hoc' | 'none';
+    workspaceDirs: string[];
+    packageManager: 'npm' | 'yarn' | 'pnpm';
+    subProjects: SubProjectProfile[];   // NEW — full breakdown including 
+                                          // per-project entryPoints
+  }
+
+---
+
+2. UPDATE packages/core/src/analysis/framework-detector.ts:
+
+When constructing each SubProjectProfile object (both the root one, if a 
+root package.json exists, and every nested one found via the depth-1 
+scan), initialize entryPoints: [] — this field stays empty at this stage 
+because framework detection runs BEFORE file discovery/content-caching in 
+the pipeline order (Framework Detection happens before Discovery per 
+ARCHITECTURE.md Section 7). It will be populated later in prioritizer.ts 
+once file contents are available.
+
+No other logic changes needed in this file — the generic depth-1 
+directory scan already in place correctly handles ANY folder naming 
+convention (backend/frontend, client/server, api/web, etc.) since it 
+checks every top-level directory for a package.json regardless of name.
+
+---
+
+3. UPDATE packages/core/src/analysis/prioritizer.ts:
+
+Rewrite detectEntryPoints to be sub-project-aware:
+
+  export function detectEntryPoints(
+    files: FileNode[],
+    contentCache: Map<string, string>,
+    subProjects: SubProjectProfile[]
+  ): { global: Set<string>; bySubProject: Map<string, string[]> }
+
+Logic:
+
+a) Keep the existing signature list unchanged: app.listen(, createServer(, 
+   ReactDOM.createRoot(, ReactDOM.render(, NestFactory.create(
+
+b) EDGE CASE — if subProjects.length === 0 (no package.json found 
+   anywhere in the repo): scan ALL files against the signatures as a 
+   single implicit group, return { global: <matched paths>, 
+   bySubProject: new Map() } (empty map since there are no formal 
+   sub-projects to attribute entry points to).
+
+c) NORMAL CASE — if subProjects.length >= 1: for each subProject, 
+   determine which files "belong" to it using this rule:
+   - If subProject.rootRelativePath === '' (the root project): a file 
+     belongs to it if its path does NOT start with 
+     `${otherSubProject.rootRelativePath}/` for ANY other subProject in 
+     the list (this correctly excludes files that live inside nested 
+     sub-project folders from being double-counted under the root).
+   - If subProject.rootRelativePath is non-empty (e.g. "backend", 
+     "apps/api"): a file belongs to it if its path starts with 
+     `${subProject.rootRelativePath}/`.
+
+   For each subProject's file subset, scan for signature matches exactly 
+   as before. Store the matched paths in bySubProject.set(subProject.
+   rootRelativePath, matchedPaths).
+
+d) Build global: Set<string> as the union of every array in bySubProject 
+   (or the single implicit group's results in the edge case from step b). 
+   This global set is what continues to feed the existing 
+   EntryPointBonus scoring logic in scoreFile() — that scoring logic 
+   itself does NOT need to change; a file still gets the flat +30 bonus 
+   if it's in the global set, regardless of which sub-project it belongs to.
+
+e) Return { global, bySubProject }.
+
+Update the calling code in prioritizeFiles() (or wherever 
+detectEntryPoints was previously called) to destructure { global } for 
+the existing scoring logic, and separately expose { bySubProject } so the 
+pipeline can write it back into the FrameworkProfile's subProjects array.
+
+---
+
+4. UPDATE packages/core/src/pipeline.ts:
+IGNORE THIS STEP!
+---
+
+5. UPDATE packages/core/src/__tests__/prioritizer.test.ts:
+
+Add test cases using a fixture with TWO differently-named sub-projects 
+(use "client" and "server" instead of "backend"/"frontend" this time, 
+specifically to prove the fix is generic and not name-hardcoded):
+
+  fixture-root/
+    server/
+      package.json  (dependencies: { express: "^4.0.0" })
+      index.ts      (contains: app.listen(3000))
+    client/
+      package.json  (dependencies: { react: "^18.0.0" })
+      src/main.tsx  (contains: ReactDOM.createRoot(...))
+
+Build the subProjects array manually for this fixture (rootRelativePath: 
+"server" and "client"), then call detectEntryPoints(files, contentCache, 
+subProjects) and assert:
+  - bySubProject.get("server") contains "server/index.ts"
+  - bySubProject.get("client") contains "client/src/main.tsx"
+  - global contains BOTH paths
+  - bySubProject.get("server") does NOT contain "client/src/main.tsx" 
+    (proves correct isolation between sub-projects)
+
+Also add a regression test for the original single-project case (no 
+sub-projects, subProjects = [{ rootRelativePath: '', ... }]) confirming 
+entry points are still correctly attributed to the root "" key and 
+appear in global as before.
+
+Also add the edge-case test for subProjects.length === 0 (no package.json 
+anywhere) confirming global still populates correctly via the fallback 
+whole-repo scan and bySubProject is an empty Map.
+
+---
+
+6. UPDATE (or CREATE if it doesn't exist yet) 
+packages/core/src/__tests__/pipeline.test.ts:
+
+Add a test using a fixture repo structured like the "client"/"server" 
+example above, run the FULL runPipeline() (with LLM calls mocked), and 
+assert that the returned result.meta.subProjects array has exactly 2 
+entries, each with the correct rootRelativePath, frameworks, and a 
+non-empty entryPoints array pointing to the correct file for that 
+specific sub-project (not the other one).
+
+---
+
+7. UPDATE packages/core/manual-test-scoring.ts (the temporary diagnostic 
+script):
+
+In the section that prints framework detection results, after listing 
+subProjects (rootRelativePath, frameworks, packageManager), add a new 
+column/line per sub-project showing its entryPoints array, e.g.:
+
+  Sub-project: server
+    Frameworks: express
+    Package Manager: npm
+    Entry Points: server/index.ts
+
+  Sub-project: client
+    Frameworks: react, vite
+    Package Manager: npm
+    Entry Points: client/src/main.tsx
+
+If a sub-project has an empty entryPoints array, print a warning line: 
+"⚠️ No entry point detected for sub-project '{path}' — may need manual review"
+
+In the SANITY CHECKS section, add: if subProjects.length > 1, assert that 
+AT LEAST ONE sub-project has a non-empty entryPoints array, print ✅/❌ 
+accordingly, and print how many sub-projects total have zero detected 
+entry points as an informational count (not necessarily a failure, since 
+some sub-projects — e.g. a shared utils package — legitimately have no 
+runtime entry point).
+
+---
+
+8. UPDATE ARCHITECTURE.md:
+
+Extend the subsection added in the previous fix (about ad-hoc 
+multi-package detection) with: "Entry point detection is performed 
+per-sub-project by attributing each discovered file to its owning 
+sub-project via path-prefix matching against subProjects[].
+rootRelativePath, then running the same signature-based scan 
+(app.listen(, ReactDOM.createRoot(, etc.) independently within each 
+sub-project's file subset. This ensures a split repository (regardless of 
+folder naming — backend/frontend, client/server, api/web, or otherwise) 
+produces distinct, correctly-attributed entry points per sub-project 
+rather than a single ambiguous flat list, enabling accurate per-project 
+onboarding instructions in later documentation stages. A sub-project with 
+zero detected entry points (e.g. a shared library package with no runtime 
+bootstrap) is valid and not treated as an error."
+
+---
+
+Run lint --fix across all changed files. Run the full test suite 
+(npm run test --workspaces) and confirm no existing tests regress, 
+especially the earlier ad-hoc multi-package detection tests from the 
+previous fix. Append an entry to prompts.md documenting this fix per the 
+CLAUDE.md format.
+
+NOTE: pipeline.ts does not exist yet — do NOT create or modify it in this 
+task. The `frameworkProfile.subProjects` → `repoMeta.subProjects` wiring 
+described for "pipeline.ts" will happen naturally when pipeline.ts is 
+built in its own upcoming task; skip step 4 of this prompt entirely for now.
+
 ---
