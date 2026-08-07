@@ -1248,3 +1248,61 @@ sequential Groq→Gemini attempt — not a bug); `TokenBucketRateLimiter.waitFor
 never rejects, only delays, so it cannot be misread as a provider failure.
 
 ---
+
+## Deep Dive Agent Tools
+
+### Goal
+Implement the 5 Deep Dive ReAct agent tools (`read_file`, `search_code`,
+`list_directory`, `get_file_summary`, `find_references`) in
+`packages/core/src/agent/tools.ts` per PRD.md §4.7 and ARCHITECTURE.md's
+`DeepDiveSession` interface, with a dry-run test suite using a fixture
+sandbox directory before any real agent loop consumes them.
+
+### User Prompt
+Read the SESSION_SUMMARY.md file first.
+Then,
+Read PRD.md Section 4.7 and ARCHITECTURE.md's DeepDiveSession interface.
+
+Implement packages/core/src/agent/tools.ts:
+- export interface AgentContext { sandboxPath: string; repoMeta: RepoMeta;
+  summariesMap: Map<string, FileSummary>; visitedFiles: Map<string,
+  string>; }
+- export interface AgentTool { name: string; description: string;
+  parameters: z.ZodSchema; execute: (args: any, ctx: AgentContext) =>
+  Promise<string>; }
+- Implement exactly 5 tools using ToolArgsSchemas from schemas.ts:
+  1. read_file — checks ctx.visitedFiles FIRST; if present, returns
+     "[Already examined earlier in this session]\n" + cached content
+     WITHOUT re-reading disk. Otherwise calls assertSafePath, reads via
+     fs.readFileSync, truncates to 4000 chars, stores in
+     ctx.visitedFiles, returns the content. Catches and returns file-
+     not-found errors as a string (never throws).
+  2. search_code — simple case-insensitive substring search across all
+     files in ctx.summariesMap's keys (read from disk via assertSafePath
+     for each), returns up to maxResults matching "path:line: <line
+     content>" entries.
+  3. list_directory — assertSafePath then fs.readdirSync, returns a
+     newline-joined list of entries with trailing '/' for directories.
+  4. get_file_summary — looks up path in ctx.summariesMap, returns its
+     JSON-stringified FileSummary or "No summary available for this
+     file" if absent.
+  5. find_references — searches all files for occurrences of the given
+     symbol string (as a whole word, via regex \\bSYMBOL\\b), returns
+     matching "path:line" entries.
+- export const TOOLS: AgentTool[] — array of all 5 tools above.
+
+Write packages/core/src/__tests__/agent-tools.test.ts using a fixture
+sandbox directory:
+- read_file returns real content on first call, then returns the
+  "[Already examined]" prefixed cached content on a second call for the
+  same path WITHOUT re-reading from disk (spy on fs.readFileSync call
+  count to verify it's called exactly once for that path)
+- read_file attempting path traversal (../../etc/passwd) throws/returns
+  an error string, never escapes the sandbox
+- get_file_summary returns the correct summary for a known path and the
+  fallback string for an unknown path
+- search_code and find_references return expected matches on fixture files
+
+Run auto-lint skill. Append entry to prompts.md
+
+---
