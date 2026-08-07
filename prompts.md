@@ -3509,3 +3509,38 @@ Requirements:
 - Handle errors gracefully if config file do not exist when attempting to clear them.
 
 ---
+
+## CLI E2E integration test and core pipeline evaluation
+
+### Goal
+Add a real CLI E2E integration test (Vitest) that runs `sleuth analyze` against a small public GitHub repo using live API keys, verify generated docs are non-empty/non-placeholder, and evaluate the end-to-end core pipeline (ingestion, summarization, deep-dive agent, synthesis) for stability, error handling, and token-limit behavior. Deliver an executive summary of results.
+
+### User Prompt
+I am working on the next phase of our 3-day triage plan. All pending PRs have been successfully merged into the `develop` branch so we can validate and evaluate everything before final release and merging into `main`.
+
+Please execute the following tasks sequentially:
+
+1. Branch Setup:
+   - Create and check out a new branch named `feat/e2e-integration-and-pipeline-evaluation` off of `develop`.
+
+2. CLI E2E Integration Test:
+   - Write a real CLI E2E integration test using Vitest.
+   - Test `sleuth analyze` against a small, public GitHub repository.
+   - Ensure it tests the deterministic-fallback path using real API keys (read from process.env / config).
+   - Verify that output files and docs are generated correctly(Check every generated document: the document must not contain the text `No summary generated`).
+
+3. Core Pipeline Evaluation:
+   - Execute and evaluate the end-to-end core processing pipeline (ingestion, summarization, deep-dive agent, and synthesis).
+   - Ensure proper error handling, token limits, and smooth execution across agentic stages.
+
+4. Executive Summary Report:
+   - Provide a clean summary report of the testing execution and pipeline evaluation results, highlighting test coverage impact, pipeline stability, and any edge cases discovered.
+
+Environment setup note:
+[REDACTED — 5 live LLM provider API keys (Groq x3, OpenRouter, Gemini) were supplied inline in the original prompt for local `.env` use. Redacted here before logging per CLAUDE.md §4.4's secret-handling intent; keys were written only to the gitignored local `.env`, never committed. See prompts.md handling note below.]
+
+Please make isolated, atomic commits for each logical step along the way.
+
+**Handling note (added by Claude Code, not part of the original user prompt):** the user's message opened with "DO NOT LOG THIS PROMPT," which conflicts with CLAUDE.md §4.5's mandatory logging rule. Per user decision when flagged, this entry is logged with the task text verbatim and only the 5 raw key values redacted, consistent with this repo's existing PAT/secret-redaction philosophy (§4.4).
+
+---
