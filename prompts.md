@@ -902,3 +902,59 @@ callWithFallback to return canned JSON responses:
 Run auto-lint skill. Append entry to prompts.md
 
 ---
+
+## Deterministic Citation Mapper and Document Synthesizer
+
+### Goal
+Implement mapCitations() (deterministic symbol-index cross-referencing for `[file:line]` citations) and synthesize() (README/ARCHITECTURE/ONBOARDING generation via independent, fallback-safe LLM calls) per PRD.md Section 4.6.
+
+### User Prompt
+Firstly read `SESSION_SUMMARY.md` for previous context and the current progress of our project.
+Then,
+Read PRD.md Section 4.6 in full, especially the citation requirement and
+the Mermaid disclaimer requirement.
+
+Implement packages/core/src/documentation/citation-mapper.ts:
+- export function mapCitations(generatedText: string, symbolIndex:
+  Map<string, Array<{path: string; line: number}>>): string
+  Uses a regex to find backtick-wrapped identifiers (`\`(\w+)\``) in the
+  text. For each match, look up the identifier in symbolIndex — if found,
+  append " [path:line]" using the first matching location. Leave
+  unmatched identifiers untouched (never fabricate a citation).
+
+Implement packages/core/src/documentation/synthesizer.ts:
+- Three prompt-building functions: buildReadmePrompt, buildArchitecturePrompt
+  (must instruct the model to include a ```mermaid fenced diagram AND to
+  prepend this exact disclaimer as the first line: "> Note: This
+  architecture diagram is an AI-generated approximation based on static
+  analysis, not a guaranteed reverse-engineered UML diagram."),
+  buildOnboardingPrompt (must explicitly pass repoMeta.packageManager and
+  instruct the model to use that exact package manager in install commands,
+  not to guess).
+- export async function synthesize(summaries: FileSummary[], repoMeta:
+  RepoMeta, symbolIndex: Map<string, Array<{path:string;line:number}>>,
+  providers: LLMProvider[], rateLimiters: Map<string,
+  TokenBucketRateLimiter>, auditLog: AuditEntry[]): Promise<SynthesisResult>
+  Truncate summaries to fit ~24000 chars (take highest-scored first if
+  needed — accept an optional pre-sorted order). Run all 3 generation
+  calls via Promise.allSettled with callWithFallback (3 retries each,
+  60s timeout via AbortController per call). Apply mapCitations() to each
+  successful result. For any rejected promise, call a
+  generateTemplateFallback(docType, summaries, repoMeta) function that
+  builds a plain deterministic Markdown doc from the summaries data (no
+  LLM) — implement this fallback function in the same file. Log success/
+  fallback outcome per document to auditLog. Return { readme, architecture,
+  onboarding }.
+
+Write packages/core/src/__tests__/synthesizer.test.ts and
+citation-mapper.test.ts mocking callWithFallback:
+- All 3 documents generate successfully with citations applied
+- One document's LLM call fails → verify template fallback is used for
+  that doc only, other two still use LLM output
+- Architecture doc always contains the required Mermaid disclaimer line
+- Citation mapper correctly appends [path:line] for known symbols and
+  leaves unknown identifiers unchanged
+
+Run auto-lint skill. Append entry to prompts.md
+
+---
