@@ -31,10 +31,27 @@ export interface PipelineResult {
   auditLog: AuditEntry[];
   sandboxPath: string;
   durationMs: number;
+  // Files whose LLM summarization failed after retries (fell back to a
+  // placeholder summary) — a non-empty list is a partial-success signal, not
+  // a pipeline failure: see the stall-watchdog comment on runPipeline below
+  // for why "took a while" and "failed" are deliberately different things now.
+  failedFiles: string[];
 }
 
 const DEFAULT_MAX_FILES = 150;
-const PIPELINE_TIMEOUT_MS = 5 * 60 * 1000;
+// No progress at all (no stage transition, no file/doc completing) for this
+// long is treated as genuinely stuck and aborted. Duration alone — a big repo
+// legitimately taking a while — must never trip this on its own; every stage
+// below touches the watchdog as it makes real, verifiable progress.
+const STALL_TIMEOUT_MS = 90 * 1000;
+// Final safety net regardless of how much (slow-but-real) progress is
+// happening — catches a pathological case where something keeps touching
+// progress just often enough to dodge the stall watchdog without actually
+// finishing. Deliberately generous: large repos are expected to legitimately
+// take minutes now that summarization runs in parallel and per-call waits are
+// capped (see provider.ts's MAX_SINGLE_RATE_LIMIT_WAIT_MS).
+const ABSOLUTE_TIMEOUT_MS = 30 * 60 * 1000;
+const WATCHDOG_INTERVAL_MS = 5 * 1000;
 
 // Conservative free-tier RPM ceilings — under-provisioning just slows the run,
 // while guessing too high risks 429s the retry budget in provider.ts can't absorb.
@@ -89,6 +106,7 @@ async function executePipeline(
   auditLog: AuditEntry[],
   startedAt: number,
   onSandboxCreated: (sandboxPath: string) => void,
+  signal: AbortSignal,
 ): Promise<PipelineResult> {
   const maxFiles = options.maxFiles ?? DEFAULT_MAX_FILES;
 
@@ -174,9 +192,11 @@ async function executePipeline(
   const summarizerRateLimiters = buildRateLimiters(summarizerProviders);
 
   let summaries: FileSummary[];
+  let failedFiles: string[];
+  const summarizationStartedAt = Date.now();
 
   try {
-    summaries = await summarizeFiles(
+    const result = await summarizeFiles(
       prioritized,
       contentCache,
       repoMeta,
@@ -184,10 +204,29 @@ async function executePipeline(
       summarizerRateLimiters,
       cache,
       auditLog,
-      (completed, total) => options.onProgress?.('summarization', `${completed}/${total} files summarized`),
+      (completed, total) => {
+        const elapsedS = Math.round((Date.now() - summarizationStartedAt) / 1000);
+        const etaS = completed > 0 ? Math.round((elapsedS / completed) * (total - completed)) : undefined;
+        const etaSuffix = etaS !== undefined && etaS > 0 && completed < total ? `, ~${etaS}s remaining` : '';
+
+        options.onProgress?.('summarization', `${completed}/${total} files summarized (${elapsedS}s elapsed${etaSuffix})`);
+      },
+      signal,
     );
+
+    summaries = result.summaries;
+    failedFiles = result.failedFiles;
   } finally {
     cache.close();
+  }
+
+  if (failedFiles.length > 0) {
+    pushAudit(
+      auditLog,
+      'summarization',
+      'partial_failure',
+      `${failedFiles.length} file(s) could not be summarized and fell back to a placeholder — run continues (not a pipeline failure): ${failedFiles.join(', ')}`,
+    );
   }
 
   options.onProgress?.('synthesis', 'Synthesizing README/ARCHITECTURE/ONBOARDING');
@@ -196,30 +235,83 @@ async function executePipeline(
     groqModel: 'llama-3.3-70b-versatile',
   });
   const synthesizerRateLimiters = buildRateLimiters(synthesizerProviders);
-  const synthesis = await synthesize(summaries, repoMeta, symbolIndex, synthesizerProviders, synthesizerRateLimiters, auditLog);
+  const synthesis = await synthesize(
+    summaries,
+    repoMeta,
+    files,
+    symbolIndex,
+    synthesizerProviders,
+    synthesizerRateLimiters,
+    auditLog,
+    options.onProgress,
+    signal,
+  );
 
   const durationMs = Date.now() - startedAt;
 
-  return { meta: repoMeta, summaries, synthesis, symbolIndex, auditLog, sandboxPath, durationMs };
+  return { meta: repoMeta, summaries, synthesis, symbolIndex, auditLog, sandboxPath, durationMs, failedFiles };
 }
 
+// "Taking a long time" and "actually failed" are deliberately different
+// events: a stall watchdog replaces the old flat wall-clock kill-timeout.
+// Every stage of executePipeline below touches `lastProgressAt` (via the
+// wrapped onProgress) as it makes real, verifiable progress — a stage
+// transition, a completed summarization batch, a doc finishing synthesis.
+// Only a genuine STALL (no progress at all for STALL_TIMEOUT_MS) or the
+// generous ABSOLUTE_TIMEOUT_MS safety net aborts the run; duration alone
+// never does. Genuine errors (bad auth, repo not found, invalid input) still
+// throw immediately from inside executePipeline, unaffected by any of this.
 export async function runPipeline(input: RepoInput, options: PipelineOptions = {}): Promise<PipelineResult> {
   const startedAt = Date.now();
   const auditLog: AuditEntry[] = [];
   let sandboxPath: string | undefined;
+  let lastProgressAt = startedAt;
+
+  const touchProgress = (): void => {
+    lastProgressAt = Date.now();
+  };
+
+  const wrappedOnProgress = (stage: string, detail?: string): void => {
+    touchProgress();
+    options.onProgress?.(stage, detail);
+  };
 
   const abortController = new AbortController();
-  const timeoutId = setTimeout(() => abortController.abort(), PIPELINE_TIMEOUT_MS);
+
+  const watchdogId = setInterval(() => {
+    const now = Date.now();
+    const sinceProgress = now - lastProgressAt;
+    const sinceStart = now - startedAt;
+
+    if (sinceProgress >= STALL_TIMEOUT_MS) {
+      abortController.abort(
+        new Error(`Pipeline stalled — no progress for ${Math.round(sinceProgress / 1000)}s (treating as stuck, not slow)`),
+      );
+    } else if (sinceStart >= ABSOLUTE_TIMEOUT_MS) {
+      abortController.abort(
+        new Error(`Pipeline exceeded the absolute safety-net duration of ${Math.round(ABSOLUTE_TIMEOUT_MS / 1000)}s`),
+      );
+    }
+  }, WATCHDOG_INTERVAL_MS);
 
   try {
     return await Promise.race([
-      executePipeline(input, options, auditLog, startedAt, (createdSandboxPath) => {
-        sandboxPath = createdSandboxPath;
-      }),
+      executePipeline(
+        input,
+        { ...options, onProgress: wrappedOnProgress },
+        auditLog,
+        startedAt,
+        (createdSandboxPath) => {
+          sandboxPath = createdSandboxPath;
+        },
+        abortController.signal,
+      ),
       new Promise<never>((_resolve, reject) => {
-        abortController.signal.addEventListener('abort', () =>
-          reject(new Error(`Pipeline exceeded ${PIPELINE_TIMEOUT_MS}ms timeout`)),
-        );
+        abortController.signal.addEventListener('abort', () => {
+          const { reason } = abortController.signal;
+
+          reject(reason instanceof Error ? reason : new Error('Pipeline aborted'));
+        });
       }),
     ]);
   } catch (err) {
@@ -229,6 +321,6 @@ export async function runPipeline(input: RepoInput, options: PipelineOptions = {
 
     throw err instanceof Error ? err : new Error(`Pipeline failed: ${String(err)}`);
   } finally {
-    clearTimeout(timeoutId);
+    clearInterval(watchdogId);
   }
 }

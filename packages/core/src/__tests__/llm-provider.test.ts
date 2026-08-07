@@ -42,6 +42,36 @@ describe('GroqProvider', () => {
     expect(() => new GroqProvider('', 'llama-3.1-8b-instant')).toThrow(/non-empty API key/);
   });
 
+  it('caps an unreasonably large retry-after (e.g. a real daily-quota-exceeded response) instead of waiting the literal duration', async () => {
+    vi.useFakeTimers();
+
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'rate limited' }), {
+          status: 429,
+          // A real quota-exhausted response can carry a retry-after of hours.
+          headers: { 'retry-after': '7200' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { content: 'hello from groq' } }] }), {
+          status: 200,
+        }),
+      );
+
+    vi.stubGlobal('fetch', fetchMock);
+
+    const provider = new GroqProvider('test-groq-key', 'llama-3.1-8b-instant');
+    const resultPromise = provider.complete('prompt', { maxTokens: 100, temperature: 0.5 });
+
+    // The literal 7200s (2 hours) never elapses — only the capped wait does.
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    await expect(resultPromise).resolves.toBe('hello from groq');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
   it('retries up to 3 times on repeated 429 responses before succeeding, not just once', async () => {
     vi.useFakeTimers();
 

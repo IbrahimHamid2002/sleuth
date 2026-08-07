@@ -83,6 +83,13 @@ export interface DeepDiveSession {
   visitedFiles: Map<string, string>;
   createdAt: number;
   lastActivityAt: number;
+  // The 3 pre-generated docs from the summarization pipeline (readme,
+  // architecture, onboarding), if available — the agent checks these first,
+  // before any live tool call over raw source, since they're already a
+  // summary of the whole repo and answering from them is far cheaper/faster
+  // than a fresh investigation. Undefined only for a session built without a
+  // completed pipeline run (e.g. some tests).
+  generatedDocs?: SynthesisResult;
 }
 
 export interface InvestigationResult {
@@ -91,6 +98,9 @@ export interface InvestigationResult {
   plan: string;
   iterations: number;
   filesExamined: string[];
+  // True when the deterministic fast-path step answered directly from the 3
+  // pre-generated docs, with zero live tool calls — see agent/investigator.ts.
+  answeredFromDocs: boolean;
   reasoningTrace: Array<{
     thought: string;
     toolName: string;

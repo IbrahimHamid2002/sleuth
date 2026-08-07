@@ -8,6 +8,15 @@ export interface LLMProvider {
 const SERVER_ERROR_BACKOFFS_MS = [500, 1000, 2000];
 const DEFAULT_RATE_LIMIT_WAIT_MS = 2000;
 const RATE_LIMIT_MAX_RETRIES = 3;
+// A daily/token-quota-exhausted 429 can carry a `retry-after` of thousands of
+// seconds (or more) — honoring that literally turns one call into a
+// multi-minute-or-longer unabortable block for every caller that doesn't
+// thread a signal through (found live: this is what was actually behind
+// `sleuth analyze` hitting its fixed 300000ms pipeline timeout on ordinary
+// repos — not a hang, just one huge uninterruptible wait). Cap the wait for a
+// SINGLE retry so a huge value degrades to "this attempt failed, move on"
+// instead of "this call blocks indefinitely."
+const MAX_SINGLE_RATE_LIMIT_WAIT_MS = 15_000;
 
 function throwIfAborted(signal: AbortSignal | undefined, providerName: string): void {
   if (signal?.aborted === true) {
@@ -67,10 +76,11 @@ async function fetchWithRetry(
 
       const retryAfterHeader = response.headers.get('retry-after');
       const retryAfterSeconds = retryAfterHeader !== null ? Number(retryAfterHeader) : undefined;
-      const waitMs =
+      const requestedWaitMs =
         retryAfterSeconds !== undefined && Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0
           ? retryAfterSeconds * 1000
           : DEFAULT_RATE_LIMIT_WAIT_MS;
+      const waitMs = Math.min(requestedWaitMs, MAX_SINGLE_RATE_LIMIT_WAIT_MS);
 
       await sleep(waitMs, signal);
 
@@ -191,6 +201,22 @@ export interface ProviderChainConfig {
   geminiModel?: string;
 }
 
+// Different call sites (pipeline summarization vs. synthesis, the Deep Dive
+// agent's reasoning vs. synthesis chains) commonly share the same Gemini
+// fallback env var name while naming distinct Groq ones — warn only once per
+// distinct missing var name per process so a missing shared key doesn't log
+// the same line once per caller.
+const warnedMissingEnvVars = new Set<string>();
+
+function warnMissingEnvVarOnce(envVar: string, providerLabel: string): void {
+  if (warnedMissingEnvVars.has(envVar)) {
+    return;
+  }
+
+  warnedMissingEnvVars.add(envVar);
+  console.warn(`${envVar} is not set — skipping ${providerLabel} provider`);
+}
+
 // Every caller (pipeline summarization, pipeline synthesis, and the Deep Dive
 // agent's two internal chains) explicitly names which env var/model it wants —
 // this function has no built-in notion of "roles" itself, so different callers
@@ -203,7 +229,7 @@ export function createProviderChain(config: ProviderChainConfig): LLMProvider[] 
   if (groqApiKey !== undefined) {
     providers.push(new GroqProvider(groqApiKey, config.groqModel));
   } else {
-    console.warn(`${config.groqApiKeyEnvVar} is not set — skipping Groq provider`);
+    warnMissingEnvVarOnce(config.groqApiKeyEnvVar, 'Groq');
   }
 
   const geminiApiKeyEnvVar = config.geminiApiKeyEnvVar ?? 'GEMINI_API_KEY';
@@ -212,7 +238,7 @@ export function createProviderChain(config: ProviderChainConfig): LLMProvider[] 
   if (geminiApiKey !== undefined) {
     providers.push(new GeminiProvider(geminiApiKey, config.geminiModel));
   } else {
-    console.warn(`${geminiApiKeyEnvVar} is not set — skipping Gemini provider`);
+    warnMissingEnvVarOnce(geminiApiKeyEnvVar, 'Gemini');
   }
 
   return providers;

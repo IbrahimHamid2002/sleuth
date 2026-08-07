@@ -63,14 +63,15 @@ describe('summarizeFiles', () => {
 
     const first = await summarizeFiles(files, contentCache, REPO_META, NO_PROVIDERS, NO_RATE_LIMITERS, cache, auditLog);
 
-    expect(first).toEqual([summaryFor('src/a.ts')]);
+    expect(first.summaries).toEqual([summaryFor('src/a.ts')]);
+    expect(first.failedFiles).toEqual([]);
     expect(callWithFallback).toHaveBeenCalledTimes(1);
 
     callWithFallback.mockClear();
 
     const second = await summarizeFiles(files, contentCache, REPO_META, NO_PROVIDERS, NO_RATE_LIMITERS, cache, auditLog);
 
-    expect(second).toEqual([summaryFor('src/a.ts')]);
+    expect(second.summaries).toEqual([summaryFor('src/a.ts')]);
     expect(callWithFallback).not.toHaveBeenCalled();
   });
 
@@ -85,10 +86,11 @@ describe('summarizeFiles', () => {
 
     const result = await summarizeFiles(files, contentCache, REPO_META, NO_PROVIDERS, NO_RATE_LIMITERS, cache, auditLog);
 
-    expect(result).toEqual([
+    expect(result.summaries).toEqual([
       { path: 'src/a.ts', purpose: 'Could not summarize', exports: [], dependencies: [], summary: 'Parse error' },
       { path: 'src/b.ts', purpose: 'Could not summarize', exports: [], dependencies: [], summary: 'Parse error' },
     ]);
+    expect(result.failedFiles.sort()).toEqual(['src/a.ts', 'src/b.ts']);
   });
 
   it('falls back only for elements that individually fail schema validation', async () => {
@@ -104,14 +106,15 @@ describe('summarizeFiles', () => {
 
     const result = await summarizeFiles(files, contentCache, REPO_META, NO_PROVIDERS, NO_RATE_LIMITERS, cache, auditLog);
 
-    expect(result[0]).toEqual(summaryFor('src/a.ts'));
-    expect(result[1]).toEqual({
+    expect(result.summaries[0]).toEqual(summaryFor('src/a.ts'));
+    expect(result.summaries[1]).toEqual({
       path: 'src/b.ts',
       purpose: 'Could not summarize',
       exports: [],
       dependencies: [],
       summary: 'Parse error',
     });
+    expect(result.failedFiles).toEqual(['src/b.ts']);
   });
 
   it('groups files into batches of at most 5 files or 6000 combined characters', async () => {
@@ -184,10 +187,105 @@ describe('summarizeFiles', () => {
 
     await summarizeFiles(files, contentCache, REPO_META, NO_PROVIDERS, NO_RATE_LIMITERS, cache, auditLog, onProgress);
 
-    // 7 files -> batches of 5 and 2 -> two onProgress calls.
+    // 7 files -> batches of 5 and 2 -> two onProgress calls. Batches now run
+    // concurrently (see MAX_CONCURRENT_BATCHES), so assert the set of
+    // "completed" values reported rather than a strict call order — order
+    // isn't a contract once batches can finish out of sequence.
     expect(onProgress).toHaveBeenCalledTimes(2);
-    expect(onProgress).toHaveBeenNthCalledWith(1, 5, 7);
-    expect(onProgress).toHaveBeenNthCalledWith(2, 7, 7);
+    expect(onProgress.mock.calls.map(([completed]) => completed).sort((a, b) => a - b)).toEqual([5, 7]);
+    expect(onProgress.mock.calls.every(([, total]) => total === 7)).toBe(true);
+  });
+
+  it('processes more batches than MAX_CONCURRENT_BATCHES without dropping any', async () => {
+    const contentCache = new Map<string, string>();
+    const files: FileNode[] = [];
+
+    // 40 files at 5/batch -> 8 batches, more than the concurrency cap (6).
+    for (let i = 0; i < 40; i += 1) {
+      const path = `src/many-${i}.ts`;
+
+      contentCache.set(path, 'w'.repeat(10));
+      files.push(makeFile(path));
+    }
+
+    callWithFallback.mockImplementation(async (_providers, prompt: string) => {
+      const paths = [...prompt.matchAll(/--- FILE: (.+?) ---/g)].map((match) => match[1]);
+
+      return JSON.stringify(paths.map((path) => summaryFor(path)));
+    });
+
+    const result = await summarizeFiles(files, contentCache, REPO_META, NO_PROVIDERS, NO_RATE_LIMITERS, cache, auditLog);
+
+    expect(callWithFallback).toHaveBeenCalledTimes(8);
+    expect(result.summaries).toHaveLength(40);
+    expect(result.failedFiles).toEqual([]);
+    expect(result.summaries.every((summary) => summary.purpose !== 'Could not summarize')).toBe(true);
+  });
+
+  it('isolates a failed batch from other, unrelated batches — only the failed batch falls back', async () => {
+    const contentCache = new Map<string, string>();
+    const files: FileNode[] = [];
+
+    // 10 files at 5/batch -> exactly 2 batches; fail only the first.
+    for (let i = 0; i < 10; i += 1) {
+      const path = `src/iso-${i}.ts`;
+
+      contentCache.set(path, 'v'.repeat(10));
+      files.push(makeFile(path));
+    }
+
+    callWithFallback.mockImplementation(async (_providers, prompt: string) => {
+      const paths = [...prompt.matchAll(/--- FILE: (.+?) ---/g)].map((match) => match[1]);
+
+      if (paths.some((path) => path.startsWith('src/iso-0') || path === 'src/iso-1.ts')) {
+        throw new Error('simulated exhausted-retries failure for this batch');
+      }
+
+      return JSON.stringify(paths.map((path) => summaryFor(path)));
+    });
+
+    const result = await summarizeFiles(files, contentCache, REPO_META, NO_PROVIDERS, NO_RATE_LIMITERS, cache, auditLog);
+
+    const failedPaths = new Set(result.failedFiles);
+    const okSummaries = result.summaries.filter((summary) => !failedPaths.has(summary.path));
+
+    expect(result.failedFiles.length).toBeGreaterThan(0);
+    expect(result.failedFiles.length).toBeLessThan(10);
+    expect(okSummaries.every((summary) => summary.purpose !== 'Could not summarize')).toBe(true);
+
+    const fallbackDetail = auditLog.find((entry) => entry.action === 'file_fallback');
+
+    expect(fallbackDetail?.detail).toContain('batch call failed');
+  });
+
+  it('treats an already-aborted signal as a per-file failure instead of hanging or throwing', async () => {
+    const contentCache = new Map([['src/a.ts', 'export const a = 1;']]);
+    const files = [makeFile('src/a.ts')];
+    const controller = new AbortController();
+
+    controller.abort();
+
+    const result = await summarizeFiles(
+      files,
+      contentCache,
+      REPO_META,
+      NO_PROVIDERS,
+      NO_RATE_LIMITERS,
+      cache,
+      auditLog,
+      undefined,
+      controller.signal,
+    );
+
+    expect(result.failedFiles).toEqual(['src/a.ts']);
+    expect(result.summaries[0]).toEqual({
+      path: 'src/a.ts',
+      purpose: 'Could not summarize',
+      exports: [],
+      dependencies: [],
+      summary: 'Parse error',
+    });
+    expect(callWithFallback).not.toHaveBeenCalled();
   });
 
   it('logs the final cache hit rate to the audit log', async () => {

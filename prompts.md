@@ -1709,3 +1709,202 @@ investigate (do not hit real network/LLM):
 Run auto-lint skill. Append entry to prompts.md
 
 ---
+
+## Deterministic directory tree + Mermaid validation/repair for generated docs
+
+### Goal
+Polish the 3 generated documents per an explicit content spec (ARCHITECTURE.md: exact directory tree, high-level system diagram, frontend component/data-flow diagrams, backend flow chart, all with reliably-correct Mermaid syntax; ONBOARDING.md: prerequisites + step-by-step onboarding; README.generated.md: more detailed explanations) — root-caused a real broken-diagram incident to LLM-authored Mermaid syntax and fixed it deterministically (a pure directory-tree renderer plus a heuristic Mermaid validator with a one-shot LLM repair pass and a guaranteed-safe stripped fallback) rather than trusting prompt compliance alone. Also investigated Deep Dive agent reliability (part 2) and delivered a ranked proposal without implementing, per the user's explicit "tell me how and then we'll start implementing" instruction.
+
+### User Prompt
+1- I want to polish my 3 generated documents 
+A- ARCHITECTURE.md must contain
+- Exact Modular Directory Tree
+- High-Level System Diagram
+- Frontend Component relation graphs
+- Frontend data flow-chart
+- Backend flow-chart
+- all graphs, flowcharts, and diagrams must be correct and the mermaid syntax must be correct because it breaks the diagrams and i've faced that issue right now in a recent repo summarization-synthesis process the syntax was rong which results in a broken diagram.
+B- ONBOARDING.md must contain clear details how an ndividual can easily onboard that project and what would be the prerequisites for getting onboard that project.
+C- README.generated.md must contain a little more detailed explanation on everything.  
+
+2- I want to refactor my deep dive agent and make its responses reliable because its not generating reliable responses right nowit only touches the surface level knowledge of the project nothing inside deep. so we have to make it more reliable tell me how and then we'll start implementing that fix.
+ 
+update the `SESSION_SUMMARY.md` file.
+run auto-lint skill and append this entry into `prompts.md`  file.
+
+---
+
+## Fix Deep Dive agent shallow-answer issues (Fixes #1, #2, #4, #5)
+
+### Goal
+Implement 4 of the 5 previously-proposed fixes for the Deep Dive agent's shallow-answer problem — reversing the `get_file_summary`-over-`read_file` guidance, adding surrounding-code context to `search_code`/`find_references`, adding pagination to `read_file`, and raising the reasoning step's token budget — while explicitly leaving `MAX_ITERATIONS` (fix #3) untouched pending review of these fixes' impact.
+
+### User Prompt
+Read the `SESSION_SUMMARY.md` first.
+Then,
+# Task: Fix Deep Dive Agent Shallow-Answer Issues (Fixes #1, #2, #4, #5 ONLY)
+
+## Context
+The Deep Dive agent gives shallow answers because of four structural issues in the tooling and reasoning pipeline. Implement fixes #1, #2, #4, #5 below. **Do NOT touch fix #3 (MAX_ITERATIONS)** — that decision is pending review of these fixes' impact first.
+
+## Explicit Non-Goals (do not do these)
+- Do NOT change `MAX_ITERATIONS` from its current value.
+- Do NOT swap the reasoning model from the 8B model to the 70B model.
+- Do NOT change the synthesis model or pipeline.
+- Do NOT change summary-generation logic for `get_file_summary` — only its tool description/guidance.
+
+---
+
+## Fix 1 — Stop `get_file_summary` from being preferred over `read_file`
+
+1. Locate the tool schema/description for `get_file_summary` and for `read_file` in `sleuth/packages/core/src/agent/tools.ts`.
+2. Rewrite `get_file_summary`'s description so it:
+   - Is framed as a **navigation/triage aid only** — for deciding which file is likely relevant.
+   - Explicitly states it must **not** be used as the basis for factual claims about behavior, logic, or implementation.
+   - Instructs the agent that any claim about how code actually works requires a follow-up `read_file` call on the real source.
+3. Strengthen `read_file`'s description to state it is the **authoritative source** for implementation details and should always be used before finalizing any answer that describes code behavior.
+4. Remove/reverse any existing wording in either tool that says "prefer this over read_file."
+
+**Acceptance check:** Read both final tool descriptions back — a new agent seeing them for the first time should conclude "summary = where to look, read_file = what's actually true."
+
+---
+
+## Fix 2 — Add context lines to `search_code` / `find_references`
+
+1. Locate the implementation of both tools.
+2. For each match, return **3 lines before and 3 lines after** the matching line (configurable constant, default `CONTEXT_LINES = 3`), not just the single line.
+3. If feasible for the languages in use, prefer **enclosing-block detection** (function/class boundary via indentation or AST) over a fixed window — return the full enclosing block when detectable, falling back to the fixed ±3 lines otherwise.
+4. In the output, visually distinguish the matched line from context (e.g. prefix matched line with `>>`), so the agent can tell what matched vs. surrounding code.
+5. Cap total returned lines per match (e.g. ~15–20 lines max) to avoid blowing up context size when there are many matches in one call.
+
+**Acceptance check:** A single `search_code` call on a common term returns readable surrounding code, not isolated one-liners, and total output size per call stays bounded.
+
+---
+
+## Fix 4 — Add pagination to `read_file` (remove hard 4000-char blindspot)
+
+1. Locate the 4000-char truncation logic in `read_file`.
+2. Add optional `offset` and `length` (or `start_line`/`end_line`) parameters.
+3. Default behavior (no params passed) stays backward-compatible: first 4000 chars, as today.
+4. When output is truncated, response must include explicit metadata so the agent knows to continue reading:
+   - Total file length
+   - Whether more content exists
+   - The exact offset/line to pass in the next call to continue
+   - Example: `"Showing chars 0–4000 of 12500. Call again with offset=4000 to continue."`
+5. Update the tool description to tell the agent this metadata exists and that it should paginate through large files rather than assuming it has seen the whole file.
+
+**Acceptance check:** Reading a file >4000 chars and following the returned pagination hint retrieves the full file across 2+ calls, with no gaps or overlaps.
+
+---
+
+## Fix 5 — Raise reasoning step's token budget (cheap lever only, no model change)
+
+1. Locate the reasoning step's model call (8B model, `maxTokens: 250`).
+2. Raise `maxTokens` to **1000** (start here; can be tuned down later based on cost/latency after review).
+3. Check the reasoning prompt itself for any instruction that artificially caps output length (e.g. "answer in 1–2 sentences," "be brief") left over from when the 250-token budget forced brevity. Relax that wording if present, so the model actually uses the new headroom instead of stopping early anyway.
+4. Confirm the model identifier is unchanged (still the 8B model) — this fix is token budget only.
+
+**Acceptance check:** Reasoning step outputs are visibly longer/more detailed than before, and are not being cut off mid-thought at the new token limit under normal use.
+
+---
+
+## Deliverables After Implementation
+
+1. A file-by-file summary of changes: what the old tool descriptions/code said, what they say now.
+2. Confirmation, explicitly stated, that:
+   - `MAX_ITERATIONS` was not changed.
+   - The reasoning model is still the 8B model (not swapped to 70B).
+3. Run 2–3 sample Deep Dive queries against the updated agent and include the full transcripts/outputs for manual review.
+4. A rough note on new token/cost implications from the larger search context and higher reasoning token budget (estimate is fine, doesn't need to be precise).
+
+Do not implement or comment on fix #3 (iteration count) — that will be evaluated separately after these results are reviewed.
+
+run auto-lint skill, append this entry into `prompts.md` file and at the end update the `SESSION_SUMMARY.md` file.
+
+---
+
+## Fix Timeout Failures in Summarization Pipeline and Deep Dive Agent
+
+### Goal
+Stop "taking a long time" from being treated as "failed": parallelize and checkpoint the summarization pipeline instead of killing it on a flat wall-clock timeout, and make the Deep Dive agent check the 3 pre-generated docs before any live source-code tool call, with an adaptive per-step timeout instead of a flat 60s kill.
+
+### User Prompt
+# Task: Fix Timeout Failures in (A) Summarization Pipeline and (B) Deep Dive Agent
+
+## Guiding Principle for Both Fixes
+"Taking a long time" and "actually failed" must never be treated as the same event again. A pipeline/agent should only be marked as failed when a genuine error occurs (auth failure, unrecoverable API error after retries, invalid input). Duration alone must never cause a failure — it should instead trigger smarter/faster behavior and clear progress signals to the user.
+
+---
+
+## PART A — Summarization Pipeline: Handle Large Repos Without Hitting the Hard Timeout
+
+### Problem
+The summarization pipeline runs as a single, long, synchronous process with a fixed wall-clock timeout. On large repos, total processing time exceeds that fixed window and the whole pipeline is killed and reported as failed — even though nothing actually went wrong, it just needed more time.
+
+### Required Fixes
+
+1. **Move off a single bounded process.**
+   Convert the pipeline into a background job (worker/queue model — e.g. a job queue or workflow engine) so it isn't bound by one request's hard duration limit. The job should be able to run as long as it needs, broken into discrete steps/tasks.
+
+2. **Parallelize file processing.**
+   Files should be summarized in parallel batches (e.g. 5–10 concurrent, tuned to LLM rate limits) instead of one at a time sequentially. This is the single biggest lever for reducing wall-clock time on large repos.
+
+3. **Add checkpointing / resume.**
+   Persist progress after each file/batch completes (to DB or storage). If the job is interrupted for any reason, it must resume from the last completed checkpoint, not restart from zero.
+
+4. **Add caching for unchanged files.**
+   Cache each file's summary keyed by content hash (or git blob SHA). On re-runs, skip files that haven't changed and reuse their cached summary. This dramatically speeds up repeat runs on large repos.
+
+5. **Fix failure semantics.**
+   The pipeline should only be marked "failed" on genuine unrecoverable errors (e.g. repo inaccessible, auth failure, LLM API error after retry-with-backoff is exhausted for a given file/chunk). A single file failing should not fail the whole run — log it, skip it, continue, and report it as a partial issue in the final summary rather than a hard pipeline failure.
+
+### Acceptance Checks
+- A repo large enough to previously hit the timeout now completes successfully (job may take longer in real time, but does not get killed).
+- Killing/interrupting the job mid-run and restarting resumes from the last checkpoint, not from scratch.
+- Re-running on an unchanged repo is significantly faster than the first run (cache hits confirmed in logs).
+- A single file summarization failure does not fail the whole pipeline — it's logged and the run continues.
+
+---
+
+## PART B — Deep Dive Agent: Fix Unnecessary 60000ms (60s) Timeouts on Simple Questions
+
+### Problem
+Even simple questions currently hit the agent's 60s timeout, because the agent goes straight to slow tools (like `file_search`, which does iterative live searching over the repo) instead of first checking the fast, already-generated analysis documents from the summarization pipeline (Part A's output).
+
+### Required Fixes
+
+1. **Tiered answer-lookup order — cheap first, expensive only if needed.**
+   The agent must first attempt to answer using the **3 pre-generated documents** produced during the summarization pipeline (these already summarize the repo and should be fast to search/read — no live tool call over raw source needed).
+   Only if the answer cannot be confidently found in those 3 documents should the agent escalate to `file_search` / live repository tools.
+   This ordering must be enforced structurally (e.g. at the orchestration/tool-selection layer or via explicit required-first-step instruction in the agent's system prompt) — not left as something the agent might do if it "feels like it."
+
+2. **Make the timeout adaptive to actual progress, not a flat wall-clock cutoff.**
+   Replace (or supplement) the flat 60000ms hard timeout with:
+   - A **soft timeout** (e.g. ~15–20s) that, when hit, sends the user a "still working, this is taking a bit longer" progress update rather than failing.
+   - A **hard timeout** as a safety net only — and ideally reset/extended each time the agent makes verifiable forward progress (e.g. a tool call completes, a new piece of evidence is gathered), rather than firing purely on total elapsed time regardless of activity.
+   - The hard timeout should still exist to catch truly stuck/looping agents, but a normal multi-step deep dive making real progress should not die simply because it crossed 60s.
+
+3. **Fail only on genuine errors.**
+   As with Part A: a timeout on a *stuck* process (no progress happening) is a legitimate failure. A slow-but-progressing multi-step answer is not a failure and should be allowed to continue (within the adaptive timeout above) or return a partial/best-effort answer with a note, rather than erroring out.
+
+4. **Show estimated time / live status on screen.**
+   Surface what the agent is currently doing and a rough time estimate (e.g. "Checking existing analysis... / Now searching source files (~10s)...") so the user has visible confidence the agent is progressing, not stuck — same pattern as Part A's ETA requirement.
+
+### Acceptance Checks
+- A simple question that's answerable from the 3 pre-generated documents returns quickly (well under old 60s ceiling) without invoking `file_search`.
+- A complex question that genuinely requires `file_search` is only escalated to it after the pre-generated docs are checked first, and is not killed by the timeout as long as it's making progress.
+- A genuinely stuck/looping query still times out and fails cleanly (safety net intact).
+- User sees live status/progress updates during multi-step answers, not silence until success or failure.
+
+---
+
+## Deliverables (for both parts)
+1. File-by-file summary of what changed, including before/after of timeout and failure-handling logic.
+2. Confirmation that genuine-error failures (bad auth, unreachable repo, exhausted retries) still fail cleanly and are not silently swallowed.
+3. Sample transcripts/logs showing:
+   - A large repo run completing successfully with progress/ETA updates.
+   - A simple Deep Dive question answered from the 3 pre-generated documents without hitting `file_search`.
+   - A complex Deep Dive question that correctly escalates to `file_search` after checking the documents first.
+4. Rough note on any new infra requirements introduced (e.g. job queue, checkpoint storage) and their cost/ops implications.
+
+---

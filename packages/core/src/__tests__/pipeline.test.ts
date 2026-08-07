@@ -192,4 +192,65 @@ describe('runPipeline', () => {
     expect(existsSync(result.sandboxPath)).toBe(true);
     expect(existsSync(join(result.sandboxPath, 'src', 'app.ts'))).toBe(true);
   });
+
+  it('reports failedFiles and still completes (not a pipeline failure) when one file genuinely cannot be summarized', async () => {
+    callWithFallback.mockImplementation(async (_providers, prompt: string) => {
+      if (prompt.includes('--- FILE:') && prompt.includes('helper.ts')) {
+        throw new Error('simulated exhausted-retries failure');
+      }
+
+      if (prompt.includes('--- FILE:')) {
+        const paths = [...prompt.matchAll(/--- FILE: (.+?) ---/g)].map((match) => match[1]);
+
+        return JSON.stringify(paths.map((path) => ({ path, purpose: `purpose for ${path}`, exports: [], dependencies: [], summary: `summary for ${path}` })));
+      }
+
+      if (prompt.includes('README.md')) {
+        return 'Generated README referencing `createApp`.';
+      }
+
+      if (prompt.includes('ARCHITECTURE.md')) {
+        return `${MERMAID_DISCLAIMER}\n\n\`\`\`mermaid\nflowchart TD\n  A --> B\n\`\`\`\n\nGenerated architecture referencing \`createApp\`.`;
+      }
+
+      return 'Generated onboarding referencing `createApp`.';
+    });
+
+    const result = await runPipeline({ type: 'local', path: fixtureDir }, { skipCache: true });
+
+    createdSandboxPaths.push(result.sandboxPath);
+
+    expect(result.failedFiles).toContain('src/utils/helper.ts');
+    // The run still completed end-to-end (synthesis included) despite the failure.
+    expect(result.synthesis.readme.length).toBeGreaterThan(0);
+
+    const fallbackSummary = result.summaries.find((summary) => summary.path === 'src/utils/helper.ts');
+
+    expect(fallbackSummary?.purpose).toBe('Could not summarize');
+
+    const partialFailureEntry = result.auditLog.find((entry) => entry.action === 'partial_failure');
+
+    expect(partialFailureEntry?.detail).toContain('src/utils/helper.ts');
+  });
+
+  it('aborts as a stall — not a silent hang — when a stage makes no progress at all, and still cleans up the sandbox', async () => {
+    vi.useFakeTimers();
+
+    try {
+      // Never resolves: simulates a genuinely stuck call (e.g. an unabortable
+      // wait) rather than one that's merely slow-but-progressing.
+      callWithFallback.mockImplementation(() => new Promise(() => {}));
+
+      const runPromise = runPipeline({ type: 'local', path: fixtureDir }, { skipCache: true });
+      const rejection = expect(runPromise).rejects.toThrow(/stalled/i);
+
+      // Watchdog ticks every 5s (WATCHDOG_INTERVAL_MS) and stalls at 90s
+      // (STALL_TIMEOUT_MS) of zero progress — advance well past that.
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  }, 20000);
 });

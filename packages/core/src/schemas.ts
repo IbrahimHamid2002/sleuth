@@ -22,12 +22,26 @@ export const CombinedPlanAndDecisionSchema = AgentDecisionSchema.extend({
   plan: z.string(),
 });
 
+// The deterministic fast-path step's response shape (see
+// agent/prompts.ts's buildFastPathPrompt) — checks whether the 3
+// pre-generated docs alone can confidently answer a question before any live
+// tool call runs.
+export const FastPathAnswerSchema = z.object({
+  answerable: z.boolean(),
+  answer: z.string().optional(),
+});
+
 export const ToolArgsSchemas = {
-  read_file: z.object({ path: z.string() }),
+  read_file: z.object({
+    path: z.string(),
+    offset: z.number().int().min(0).optional(),
+    length: z.number().int().positive().optional(),
+  }),
   search_code: z.object({ query: z.string(), maxResults: z.number().default(20) }),
   list_directory: z.object({ path: z.string() }),
   get_file_summary: z.object({ path: z.string() }),
   find_references: z.object({ symbol: z.string() }),
+  search_docs: z.object({ query: z.string() }),
 };
 
 export const RepoInputSchema = z

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   AgentDecisionSchema,
   CombinedPlanAndDecisionSchema,
+  FastPathAnswerSchema,
   FileSummarySchema,
   RepoInputSchema,
   ToolArgsSchemas,
@@ -230,6 +231,41 @@ describe('ToolArgsSchemas', () => {
     it('fails when path is not a string', () => {
       expect(ToolArgsSchemas.read_file.safeParse({ path: 123 }).success).toBe(false);
     });
+
+    it('passes with valid offset and length', () => {
+      const result = ToolArgsSchemas.read_file.safeParse({ path: 'src/index.ts', offset: 4000, length: 2000 });
+
+      expect(result.success).toBe(true);
+
+      if (result.success) {
+        expect(result.data.offset).toBe(4000);
+        expect(result.data.length).toBe(2000);
+      }
+    });
+
+    it('leaves offset/length undefined when omitted', () => {
+      const result = ToolArgsSchemas.read_file.safeParse({ path: 'src/index.ts' });
+
+      expect(result.success).toBe(true);
+
+      if (result.success) {
+        expect(result.data.offset).toBeUndefined();
+        expect(result.data.length).toBeUndefined();
+      }
+    });
+
+    it('fails when offset is negative', () => {
+      expect(ToolArgsSchemas.read_file.safeParse({ path: 'src/index.ts', offset: -1 }).success).toBe(false);
+    });
+
+    it('fails when offset is not an integer', () => {
+      expect(ToolArgsSchemas.read_file.safeParse({ path: 'src/index.ts', offset: 1.5 }).success).toBe(false);
+    });
+
+    it('fails when length is zero or negative', () => {
+      expect(ToolArgsSchemas.read_file.safeParse({ path: 'src/index.ts', length: 0 }).success).toBe(false);
+      expect(ToolArgsSchemas.read_file.safeParse({ path: 'src/index.ts', length: -100 }).success).toBe(false);
+    });
   });
 
   describe('search_code', () => {
@@ -296,6 +332,48 @@ describe('ToolArgsSchemas', () => {
     it('fails without a symbol', () => {
       expect(ToolArgsSchemas.find_references.safeParse({}).success).toBe(false);
     });
+  });
+
+  describe('search_docs', () => {
+    it('passes with a query', () => {
+      expect(ToolArgsSchemas.search_docs.safeParse({ query: 'express' }).success).toBe(true);
+    });
+
+    it('fails without a query', () => {
+      expect(ToolArgsSchemas.search_docs.safeParse({}).success).toBe(false);
+    });
+  });
+});
+
+describe('FastPathAnswerSchema', () => {
+  it('passes for answerable: true with an answer', () => {
+    const result = FastPathAnswerSchema.safeParse({ answerable: true, answer: 'It uses Express.' });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('passes for answerable: false without an answer', () => {
+    const result = FastPathAnswerSchema.safeParse({ answerable: false });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('passes for answerable: true even without an answer (no cross-field constraint)', () => {
+    const result = FastPathAnswerSchema.safeParse({ answerable: true });
+
+    expect(result.success).toBe(true);
+  });
+
+  it('fails when answerable is missing', () => {
+    const result = FastPathAnswerSchema.safeParse({ answer: 'something' });
+
+    expect(result.success).toBe(false);
+  });
+
+  it('fails when answerable is not a boolean', () => {
+    const result = FastPathAnswerSchema.safeParse({ answerable: 'yes' });
+
+    expect(result.success).toBe(false);
   });
 });
 

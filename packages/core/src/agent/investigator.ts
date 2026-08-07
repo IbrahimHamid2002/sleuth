@@ -1,11 +1,11 @@
 import type { LLMProvider } from '../llm/provider';
 import { callWithFallback } from '../llm/provider';
 import type { TokenBucketRateLimiter } from '../llm/rate-limiter';
-import { AgentDecisionSchema, CombinedPlanAndDecisionSchema } from '../schemas';
+import { AgentDecisionSchema, CombinedPlanAndDecisionSchema, FastPathAnswerSchema } from '../schemas';
 import type { DeepDiveSession, InvestigationResult } from '../types';
 import { extractJSON } from '../utils/json-repair';
 
-import { buildCombinedPlanAndDecisionPrompt, buildReasonPrompt, buildSynthesisPrompt, MAX_ITERATIONS } from './prompts';
+import { buildCombinedPlanAndDecisionPrompt, buildFastPathPrompt, buildReasonPrompt, buildSynthesisPrompt, MAX_ITERATIONS } from './prompts';
 import { touchSession } from './session';
 import type { AgentContext } from './tools';
 import { TOOLS } from './tools';
@@ -26,14 +26,38 @@ export interface AgentProviders {
   synthesisProviders: LLMProvider[];
 }
 
-const AGENT_TIMEOUT_MS = 60_000;
-// Reasoning/planning calls only ever need to return a small JSON object, never
-// long prose — kept tight to reduce both latency and the risk of the model
-// wasting its budget on a truncated response.
-const REASON_MAX_TOKENS = 250;
+// "Taking a long time" and "actually failed" are deliberately different
+// events (same principle as pipeline.ts's stall watchdog): a flat wall-clock
+// timeout used to kill a multi-step investigation that was making real
+// progress just because the total crossed 60s. This is now 3 separate knobs:
+//  - SOFT_TIMEOUT_MS: no progress for this long -> emit a "still working"
+//    progress event, but keep going. Never aborts anything.
+//  - STEP_TIMEOUT_MS (the exported `timeoutMs` default): the per-step
+//    watchdog, RESET every time a step completes (a reasoning call resolves,
+//    a tool finishes executing). Only a SINGLE step stuck for this long is
+//    treated as genuinely stuck and aborted — a session making steady
+//    progress across many steps never trips this even past 60s total.
+//  - SESSION_SAFETY_CAP_MS: an absolute backstop regardless of how much
+//    progress happened, in case something pathological keeps resetting the
+//    per-step watchdog without the investigation ever actually finishing.
+const SOFT_TIMEOUT_MS = 15_000;
+const STEP_TIMEOUT_MS = 60_000;
+const SESSION_SAFETY_CAP_MS = 180_000;
+const WATCHDOG_TICK_MS = 2_000;
+
+// Raised from 250: at 250 tokens the "thought" field routinely got cut off
+// mid-sentence before the model could reason through more than a shallow
+// observation, which fed directly into shallow final answers (the "thought"
+// budget structurally discouraged a deliberate, multi-step investigation).
+// Still the 8B model — this is a token-budget change only.
+const REASON_MAX_TOKENS = 1000;
 const REASON_TEMPERATURE = 0.2;
 const SYNTHESIS_MAX_TOKENS = 2000;
 const SYNTHESIS_TEMPERATURE = 0.3;
+// The fast-path doc-only check may need to write a full answer, not just a
+// small JSON decision, so it gets more headroom than a bare reasoning step.
+const FAST_PATH_MAX_TOKENS = 800;
+const FAST_PATH_TEMPERATURE = 0.2;
 
 interface ScratchpadEntry {
   thought: string;
@@ -46,6 +70,45 @@ function emit(onEvent: ((event: AgentEvent) => void) | undefined, type: string, 
   onEvent?.({ type, data });
 }
 
+// Part B fix #1 (tiered answer lookup, cheap first): tries to answer purely
+// from the 3 pre-generated docs, with zero live tool calls. Called
+// unconditionally before the ReAct loop starts (see runInvestigation) — this
+// is what makes "check the docs first" structural rather than a tool the
+// model might skip. Any failure here (timeout, malformed response, no docs
+// available) just means "fall through to the normal investigation"; it is
+// purely an optimization and must never itself cause a failure.
+async function tryFastPathFromDocs(
+  question: string,
+  session: DeepDiveSession,
+  reasoningProviders: LLMProvider[],
+  rateLimiters: Map<string, TokenBucketRateLimiter>,
+  signal: AbortSignal,
+): Promise<string | undefined> {
+  if (session.generatedDocs === undefined) {
+    return undefined;
+  }
+
+  try {
+    const prompt = buildFastPathPrompt(question, session.repoMeta, session.generatedDocs);
+    const responseText = await callWithFallback(
+      reasoningProviders,
+      prompt,
+      { maxTokens: FAST_PATH_MAX_TOKENS, temperature: FAST_PATH_TEMPERATURE },
+      rateLimiters,
+      signal,
+    );
+    const parsed = FastPathAnswerSchema.parse(extractJSON(responseText));
+
+    if (parsed.answerable && parsed.answer !== undefined && parsed.answer.trim().length > 0) {
+      return parsed.answer;
+    }
+
+    return undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 async function runInvestigation(
   question: string,
   session: DeepDiveSession,
@@ -53,14 +116,38 @@ async function runInvestigation(
   rateLimiters: Map<string, TokenBucketRateLimiter>,
   onEvent: ((event: AgentEvent) => void) | undefined,
   signal: AbortSignal,
+  touchProgress: () => void,
 ): Promise<InvestigationResult> {
   emit(onEvent, 'planning', { question });
+  emit(onEvent, 'fast_path_check', { message: 'Checking existing analysis documents before searching source...' });
+
+  const fastPathAnswer = await tryFastPathFromDocs(question, session, providers.reasoningProviders, rateLimiters, signal);
+
+  touchProgress();
+
+  if (fastPathAnswer !== undefined) {
+    emit(onEvent, 'fast_path_hit', { message: 'Answered from the pre-generated documents — no source investigation needed.' });
+    touchSession(session);
+
+    return {
+      question,
+      answer: fastPathAnswer,
+      plan: '(answered directly from the 3 pre-generated documents — no live investigation needed)',
+      iterations: 0,
+      filesExamined: [],
+      answeredFromDocs: true,
+      reasoningTrace: [],
+    };
+  }
+
+  emit(onEvent, 'fast_path_miss', { message: 'Pre-generated documents did not cover this — starting a full investigation.' });
 
   const ctx: AgentContext = {
     sandboxPath: session.sandboxPath,
     repoMeta: session.repoMeta,
     summariesMap: session.summariesMap,
     visitedFiles: session.visitedFiles,
+    generatedDocs: session.generatedDocs,
   };
 
   const scratchpad: ScratchpadEntry[] = [];
@@ -127,10 +214,12 @@ async function runInvestigation(
       });
 
       touchSession(session);
+      touchProgress();
 
       continue;
     }
 
+    touchProgress();
     emit(onEvent, 'thinking', { thought: decision.thought });
 
     // Early exit: once the model returns 'finish', no further reasoning calls
@@ -152,6 +241,7 @@ async function runInvestigation(
       });
 
       touchSession(session);
+      touchProgress();
 
       continue;
     }
@@ -169,6 +259,7 @@ async function runInvestigation(
       });
 
       touchSession(session);
+      touchProgress();
 
       continue;
     }
@@ -179,6 +270,7 @@ async function runInvestigation(
 
     const observation = await tool.execute(toolArgs, ctx);
 
+    touchProgress();
     emit(onEvent, 'observation', { toolName: tool.name, observation });
 
     scratchpad.push({ thought: decision.thought, toolName: tool.name, toolArgs, observation });
@@ -209,6 +301,7 @@ async function runInvestigation(
     signal,
   );
 
+  touchProgress();
   emit(onEvent, 'answer', { answer });
 
   return {
@@ -217,6 +310,7 @@ async function runInvestigation(
     plan,
     iterations: iterationsUsed,
     filesExamined,
+    answeredFromDocs: false,
     reasoningTrace: scratchpad,
   };
 }
@@ -227,25 +321,56 @@ export async function investigate(
   providers: AgentProviders,
   rateLimiters: Map<string, TokenBucketRateLimiter>,
   onEvent?: (event: AgentEvent) => void,
-  // PRD §4.7's 60s hard bound stays the default for every real caller; this is
-  // exposed only so diagnostic tooling (manual-test-agent.ts) can give real,
-  // possibly rate-limited network calls more wall-clock room without loosening
-  // the production default.
-  timeoutMs: number = AGENT_TIMEOUT_MS,
+  // PRD §4.7's 60s bound stays the default per-step watchdog for every real
+  // caller (see the STEP_TIMEOUT_MS comment above for what "per-step" means
+  // now); this is exposed only so diagnostic tooling (manual-test-agent.ts)
+  // can give real, possibly rate-limited network calls more per-step room
+  // without loosening the production default.
+  timeoutMs: number = STEP_TIMEOUT_MS,
 ): Promise<InvestigationResult> {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const startedAt = Date.now();
+  let lastProgressAt = startedAt;
+  let softNudgeSentForThisGap = false;
+
+  const touchProgress = (): void => {
+    lastProgressAt = Date.now();
+    softNudgeSentForThisGap = false;
+  };
+
+  const watchdogId = setInterval(() => {
+    const now = Date.now();
+    const sinceProgress = now - lastProgressAt;
+    const sinceStart = now - startedAt;
+
+    if (sinceProgress >= SOFT_TIMEOUT_MS && !softNudgeSentForThisGap) {
+      softNudgeSentForThisGap = true;
+      emit(onEvent, 'progress', { message: 'Still working on this — it is taking a bit longer than usual...' });
+    }
+
+    if (sinceProgress >= timeoutMs) {
+      controller.abort(
+        new Error(`Deep Dive investigation made no progress for ${Math.round(sinceProgress / 1000)}s (treating as stuck, not slow)`),
+      );
+    } else if (sinceStart >= SESSION_SAFETY_CAP_MS) {
+      controller.abort(
+        new Error(`Deep Dive investigation exceeded the absolute safety-net duration of ${Math.round(SESSION_SAFETY_CAP_MS / 1000)}s`),
+      );
+    }
+  }, WATCHDOG_TICK_MS);
 
   try {
     return await Promise.race([
-      runInvestigation(question, session, providers, rateLimiters, onEvent, controller.signal),
+      runInvestigation(question, session, providers, rateLimiters, onEvent, controller.signal, touchProgress),
       new Promise<never>((_resolve, reject) => {
-        controller.signal.addEventListener('abort', () =>
-          reject(new Error(`Deep Dive investigation exceeded ${timeoutMs}ms timeout`)),
-        );
+        controller.signal.addEventListener('abort', () => {
+          const { reason } = controller.signal;
+
+          reject(reason instanceof Error ? reason : new Error(`Deep Dive investigation exceeded ${timeoutMs}ms timeout`));
+        });
       }),
     ]);
   } finally {
-    clearTimeout(timeoutId);
+    clearInterval(watchdogId);
   }
 }

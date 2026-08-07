@@ -176,4 +176,125 @@ describe('investigate', () => {
     expect(result.reasoningTrace[1].observation).toContain('[Already examined earlier in this session]');
     expect(result.filesExamined).toEqual(['foo.ts']);
   });
+
+  describe('fast-path doc-first lookup', () => {
+    const generatedDocs = {
+      readme: 'This project is a small Express API for managing todos.',
+      architecture: 'The entry point is src/index.ts, which wires up Express routes.',
+      onboarding: 'Run `npm install` then `npm start`.',
+    };
+
+    it('answers directly from the docs with zero live tool calls when the fast-path check says answerable', async () => {
+      const docSession = createSession(buildRepoMeta(), sandboxPath, [], generatedDocs);
+
+      mockResponseSequence([
+        JSON.stringify({ answerable: true, answer: 'It is an Express API for todos (from README.generated.md).' }),
+      ]);
+
+      const result = await investigate('What kind of project is this?', docSession, emptyProviders, rateLimiters);
+
+      expect(result.answeredFromDocs).toBe(true);
+      expect(result.iterations).toBe(0);
+      expect(result.filesExamined).toEqual([]);
+      expect(result.reasoningTrace).toEqual([]);
+      expect(result.answer).toBe('It is an Express API for todos (from README.generated.md).');
+      expect(callWithFallback).toHaveBeenCalledTimes(1);
+    });
+
+    it('falls through to the normal investigation when the fast-path check says not answerable', async () => {
+      const docSession = createSession(buildRepoMeta(), sandboxPath, [], generatedDocs);
+
+      mockResponseSequence([
+        JSON.stringify({ answerable: false }),
+        combinedJSON({ thought: 'Docs did not cover this, reading foo.ts', action: 'tool_call', toolName: 'read_file', toolArgs: { path: 'foo.ts' } }),
+        decisionJSON({ thought: 'Done', action: 'finish' }),
+        'Final answer from real investigation.',
+      ]);
+
+      const result = await investigate('What does the internal helper function do exactly?', docSession, emptyProviders, rateLimiters);
+
+      expect(result.answeredFromDocs).toBe(false);
+      expect(result.iterations).toBe(2);
+      expect(result.answer).toBe('Final answer from real investigation.');
+      // 1 fast-path call + 1 combined call + 1 finish call + 1 synthesis call.
+      expect(callWithFallback).toHaveBeenCalledTimes(4);
+    });
+
+    it('falls through gracefully (no crash) when the fast-path response is malformed', async () => {
+      const docSession = createSession(buildRepoMeta(), sandboxPath, [], generatedDocs);
+
+      mockResponseSequence([
+        'not valid JSON at all {{{',
+        combinedJSON({ thought: 'Investigating for real', action: 'finish' }),
+        'Final answer despite the malformed fast-path response.',
+      ]);
+
+      const result = await investigate('Some question', docSession, emptyProviders, rateLimiters);
+
+      expect(result.answeredFromDocs).toBe(false);
+      expect(result.answer).toBe('Final answer despite the malformed fast-path response.');
+    });
+
+    it('skips the fast-path call entirely (no generatedDocs on the session) and behaves exactly as before', async () => {
+      mockResponseSequence([combinedJSON({ thought: 'No docs available', action: 'finish' }), 'Final answer with no docs.']);
+
+      const result = await investigate('Some question', session, emptyProviders, rateLimiters);
+
+      expect(result.answeredFromDocs).toBe(false);
+      expect(callWithFallback).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('adaptive timeout', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('emits a soft-timeout progress event without aborting when a single step is slow but eventually resolves', async () => {
+      vi.useFakeTimers();
+      // Advancing 25 virtual seconds through a 2s watchdog interval takes
+      // more real wall-clock time than vitest's 5s default test timeout.
+
+      // Only the FIRST call (the reasoning step) is slow — past the soft
+      // timeout (15s) but well under the per-step hard watchdog (60s); the
+      // second call (synthesis) resolves immediately.
+      let callCount = 0;
+
+      callWithFallback.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            callCount += 1;
+
+            const delayMs = callCount === 1 ? 20_000 : 0;
+
+            setTimeout(() => resolve(combinedJSON({ thought: 'Slow but fine', action: 'finish' })), delayMs);
+          }),
+      );
+
+      const events: Array<{ type: string; data: unknown }> = [];
+      const resultPromise = investigate('Slow question', session, emptyProviders, rateLimiters, (event) => events.push(event));
+
+      await vi.advanceTimersByTimeAsync(25_000);
+
+      const result = await resultPromise;
+
+      expect(events.some((event) => event.type === 'progress')).toBe(true);
+      expect(result.answer).toBeDefined();
+    }, 15000);
+
+    it('aborts as stuck (not silently hanging) when a single step makes no progress for the whole per-step window, while a fast multi-step run past the old flat 60s total is unaffected', async () => {
+      vi.useFakeTimers();
+
+      // Never resolves — simulates a genuinely stuck single call.
+      callWithFallback.mockImplementation(() => new Promise(() => {}));
+
+      const resultPromise = investigate('Stuck question', session, emptyProviders, rateLimiters);
+      const rejection = expect(resultPromise).rejects.toThrow(/made no progress|stuck/i);
+
+      // Default per-step watchdog is 60s.
+      await vi.advanceTimersByTimeAsync(65_000);
+
+      await rejection;
+    });
+  });
 });

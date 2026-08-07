@@ -1,4 +1,4 @@
-import type { FileSummary, RepoInput, RepoMeta } from '@sleuth/core';
+import type { FileSummary, RepoInput, RepoMeta, SynthesisResult } from '@sleuth/core';
 import { redactSecrets, runPipeline } from '@sleuth/core';
 import chalk from 'chalk';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -6,8 +6,11 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import ora from 'ora';
 
+import { ensureGroqApiKey } from './config';
+
 const GITHUB_URL_PATTERN = /github\.com/i;
 const CACHE_HIT_RATE_PATTERN = /Cache hit rate: ([\d.]+)%/;
+const CACHE_HIT_COUNT_PATTERN = /\((\d+)\/(\d+) files served from cache\)/;
 
 // Resolved lazily (not a module-level constant) so tests can point HOME/
 // USERPROFILE at a sandbox directory before invoking a command, without
@@ -24,12 +27,16 @@ export interface AnalyzeOptions {
   token?: string;
   maxFiles?: string;
   output?: string;
+  resume?: boolean;
 }
 
 export interface LastSession {
   sandboxPath: string;
   repoMeta: RepoMeta;
   summaries: FileSummary[];
+  // The 3 pre-generated docs from this run, carried into the Deep Dive
+  // session so `ask` can check them before falling back to live file tools.
+  synthesis: SynthesisResult;
 }
 
 function buildRepoInput(target: string, token?: string): RepoInput {
@@ -45,12 +52,17 @@ function persistLastSession(session: LastSession): void {
   writeFileSync(getSessionFile(), JSON.stringify(session, null, 2), 'utf-8');
 }
 
-function printSummaryBox(filesAnalyzed: number, cacheHitRate: string, durationMs: number): void {
+function printSummaryBox(filesAnalyzed: number, cacheHitRate: string, failedFileCount: number, durationMs: number): void {
   const lines = [
     `Files analyzed:   ${filesAnalyzed}`,
     `Cache hit rate:   ${cacheHitRate}`,
     `Duration:         ${(durationMs / 1000).toFixed(1)}s`,
   ];
+
+  if (failedFileCount > 0) {
+    lines.push(`Partial issues:   ${failedFileCount} file(s) could not be summarized (see below)`);
+  }
+
   const width = Math.max(...lines.map((line) => line.length)) + 2;
   const border = '─'.repeat(width);
 
@@ -65,17 +77,35 @@ function printSummaryBox(filesAnalyzed: number, cacheHitRate: string, durationMs
 
 export async function runAnalyzeCommand(
   target: string,
-  opts: { token?: string; maxFiles?: string; output?: string },
+  opts: { token?: string; maxFiles?: string; output?: string; resume?: boolean },
 ): Promise<void> {
   const repoInput = buildRepoInput(target, opts.token);
   const outputDir = opts.output ?? process.cwd();
 
-  const spinner = ora('Starting analysis...').start();
+  await ensureGroqApiKey('GROQ_SUMMARIZER_API_KEY');
+
+  const spinner = ora(
+    opts.resume === true ? 'Resuming previous run (reusing any cached file summaries)...' : 'Starting analysis...',
+  ).start();
+
+  // Core logs stray console.warn lines (e.g. a missing LLM API key) while the
+  // pipeline runs, entirely independent of the spinner it knows nothing
+  // about — without clearing the spinner's line first, ora's redraw and the
+  // warning's own write interleave into garbled, concatenated output.
+  const originalWarn = console.warn;
+
+  console.warn = (...args: Parameters<typeof console.warn>): void => {
+    spinner.clear();
+    originalWarn(...args);
+  };
 
   try {
     const result = await runPipeline(repoInput, {
       maxFiles: opts.maxFiles !== undefined ? Number(opts.maxFiles) : undefined,
       onProgress: (stage, detail) => {
+        // Duration alone is never treated as failure (see pipeline.ts's stall
+        // watchdog) — this text is purely informational so the user can see
+        // the run progressing, however long a large repo legitimately takes.
         spinner.text = redactSecrets(detail !== undefined ? `${stage}: ${detail}` : stage);
       },
     });
@@ -90,12 +120,40 @@ export async function runAnalyzeCommand(
     const cacheEntry = result.auditLog.find(
       (entry) => entry.stage === 'summarization' && CACHE_HIT_RATE_PATTERN.test(entry.detail),
     );
-    const cacheMatch = cacheEntry !== undefined ? CACHE_HIT_RATE_PATTERN.exec(cacheEntry.detail) : null;
-    const cacheHitRate = cacheMatch !== null ? `${cacheMatch[1]}%` : 'n/a';
+    const cacheRateMatch = cacheEntry !== undefined ? CACHE_HIT_RATE_PATTERN.exec(cacheEntry.detail) : null;
+    const cacheHitRate = cacheRateMatch !== null ? `${cacheRateMatch[1]}%` : 'n/a';
+    const cacheCountMatch = cacheEntry !== undefined ? CACHE_HIT_COUNT_PATTERN.exec(cacheEntry.detail) : null;
+    const cacheHitCount = cacheCountMatch !== null ? Number(cacheCountMatch[1]) : 0;
 
-    printSummaryBox(result.summaries.length, cacheHitRate, result.durationMs);
+    printSummaryBox(result.summaries.length, cacheHitRate, result.failedFiles.length, result.durationMs);
 
-    persistLastSession({ sandboxPath: result.sandboxPath, repoMeta: result.meta, summaries: result.summaries });
+    if (result.failedFiles.length > 0) {
+      console.log(chalk.yellow(`⚠ ${result.failedFiles.length} file(s) could not be summarized and used a placeholder instead:`));
+
+      for (const path of result.failedFiles) {
+        console.log(chalk.yellow(`  - ${redactSecrets(path)}`));
+      }
+
+      console.log(chalk.dim('  (the rest of the analysis completed normally — re-run to retry just these)\n'));
+    }
+
+    // Caching (and therefore resuming) is always on — `--resume` only makes
+    // it visible/confirmable, it never gates the underlying behavior, so a
+    // user who forgets the flag after an interruption still benefits from it.
+    if (opts.resume === true) {
+      if (cacheHitCount > 0) {
+        console.log(chalk.cyan(`↻ Resumed: ${cacheHitCount} file(s) reused from a previous run, no re-summarization needed.`));
+      } else {
+        console.log(chalk.yellow('⚠ --resume was passed, but no cached progress was found for this target — this ran as a fresh analysis.'));
+      }
+    }
+
+    persistLastSession({
+      sandboxPath: result.sandboxPath,
+      repoMeta: result.meta,
+      summaries: result.summaries,
+      synthesis: result.synthesis,
+    });
 
     console.log(chalk.cyan("💡 Run `sleuth ask` to continue investigating this repo"));
   } catch (err) {
@@ -103,6 +161,19 @@ export async function runAnalyzeCommand(
 
     spinner.fail('Analysis failed');
     console.error(chalk.red(`Error: ${redactSecrets(message)}`));
+
+    if (/stalled/i.test(message)) {
+      console.error(chalk.dim('  This means the run made no progress at all for a while, not that it was simply slow.'));
+    }
+
+    console.error(
+      chalk.dim(
+        '  Any files already summarized before this were cached — re-run the same command to resume from where it left off (or add --resume to confirm).',
+      ),
+    );
+
     process.exit(1);
+  } finally {
+    console.warn = originalWarn;
   }
 }
