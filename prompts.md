@@ -137,7 +137,7 @@ Implement packages/core/src/security/sanitize.ts:
   /github_pat_[A-Za-z0-9_]{22,}/ with "[REDACTED_TOKEN]". This function must be called before ANY console.log or logger call anywhere PAT
   values might appear.
 
-Write packages/core/src/**tests**/security.test.ts covering:
+Write packages/core/src/__tests__/security.test.ts covering:
 
 - assertSafePath blocks ../../../etc/passwd style traversal
 - assertSafePath blocks a symlink pointing outside the sandbox
@@ -181,7 +181,7 @@ Implement packages/core/src/ingestion/sandbox-manager.ts:
   Recursively sums file sizes under sandboxPath
   (used later for the 100MB clone size cap).
 
-Write packages/core/src/**tests**/sandbox-manager.test.ts covering:
+Write packages/core/src/__tests__/sandbox-manager.test.ts covering:
 
 - createSandbox creates a real, empty, writable directory
 - cleanupSandbox removes it completely
@@ -237,7 +237,7 @@ Implement packages/core/src/ingestion/local.ts:
   commit hash; otherwise generate a synthetic hash via sha256 of a sorted file listing (so caching still works deterministically for non-git
   folders).
 
-Write packages/core/src/**tests**/ingestion.test.ts (mock simple-git,
+Write packages/core/src/__tests__/ingestion.test.ts (mock simple-git,
 no real network calls):
 
 - Valid GitHub URL triggers clone with correct depth/branch args
@@ -280,7 +280,7 @@ Implement packages/core/src/analysis/framework-detector.ts:
   ones in workspaceDirs. Detect packageManager by lockfile precedence:
   pnpm-lock.yaml > yarn.lock > package-lock.json > default 'npm'.
 
-Write packages/core/src/**tests**/framework-detector.test.ts with fixture
+Write packages/core/src/__tests__/framework-detector.test.ts with fixture
 package.json objects (write temp fixture dirs) covering: pure React app,
 Next.js app, Express API, NestJS API, a pnpm monorepo with apps/ and
 packages/, and a repo with no package.json at all (must not throw).
@@ -307,10 +307,10 @@ Implement packages/core/src/analysis/discovery.ts:
   { files: FileNode[]; contentCache: Map<string, string> }
   Parse .gitignore at repoRoot using the 'ignore' package. Hardcoded
   folder exclusions: node_modules, .git, dist, build, coverage, .cache,
-  .next, **pycache**, generated, snapshots, **snapshots**, cypress, e2e. Hardcoded file exclusions: *.lock, package-lock.json, yarn.lock,
+  .next, __pycache__, generated, snapshots, __snapshots__, cypress, e2e. Hardcoded file exclusions: *.lock, package-lock.json, yarn.lock,
   pnpm-lock.yaml, and binary extensions (png, jpg, gif, svg, ico, woff,
   ttf, eot, mp3, mp4, zip, tar, gz, pdf, exe, dll, so). Hardcoded test
-  exclusions: _.test._, _.spec._, **tests**/, *.snap. Walk recursively
+  exclusions: *.test.*, *.spec.*, __tests__/, *.snap. Walk recursively
   using fs.readdirSync with withFileTypes — use lstatSync and skip any
   entry where isSymbolicLink() is true (never follow symlinks). For each candidate file, read the first 512 bytes and skip if a null byte (0x00)is found (binary detection). Enforce a hard cap: stop discovery at 1500files total — if the cap is hit, push an AuditEntry warning:
   "Discovery capped at 1500 files — analysis may be incomplete for very large repos".
@@ -319,7 +319,7 @@ Implement packages/core/src/analysis/discovery.ts:
   so later stages never need to re-read from disk. Push a final
   AuditEntry: "Discovered {n} files, skipped {m} ignored/binary/oversized".
 
-Write packages/core/src/**tests**/discovery.test.ts using a temp
+Write packages/core/src/__tests__/discovery.test.ts using a temp
 fixture directory containing: normal source files, a .gitignore
 excluding a specific subfolder, a binary file (write actual null bytes),a symlink pointing outside the fixture dir, a node_modules folder, and afile over 500KB. Assert the returned file list correctly excludes all ofthe above and the contentCache contains correct content for surviving
 files.
@@ -366,7 +366,7 @@ Implement packages/core/src/analysis/symbol-indexer.ts:
   Map<string,string>): Map<string, Array<{path: string; line: number}>>
   Runs indexSymbols across all files and builds a symbolName → locations map for later citation lookups (multiple files may export the same name).
 
-Write packages/core/src/**tests**/import-graph.test.ts and
+Write packages/core/src/__tests__/import-graph.test.ts and
 symbol-indexer.test.ts with fixture files containing known import
 relationships (including a circular import — must not infinite loop)
 and known exports, asserting correct inDegree counts and correct
@@ -408,7 +408,7 @@ Implement packages/core/src/analysis/prioritizer.ts:
   score, pushes an AuditEntry logging the top 20 files with their scores,and returns the top maxFiles entries (each with its `score` field
   populated).
 
-Write packages/core/src/**tests**/prioritizer.test.ts covering:
+Write packages/core/src/__tests__/prioritizer.test.ts covering:
 
 - package.json scores exactly 100
 - A file matching an entry-point signature receives the +30 bonus
@@ -514,7 +514,7 @@ gracefully: return frameworks: [], subProjects: [], monorepoType:
 
 ---
 
-3. UPDATE packages/core/src/**tests**/framework-detector.test.ts:
+3. UPDATE packages/core/src/__tests__/framework-detector.test.ts:
 
 Add a fixture-based test using "client"/"server" naming (deliberately
 NOT "backend"/"frontend", to prove genericness):
@@ -690,7 +690,7 @@ pipeline can write it back into the FrameworkProfile's subProjects array.
 
 ---
 
-5. UPDATE packages/core/src/**tests**/prioritizer.test.ts:
+5. UPDATE packages/core/src/__tests__/prioritizer.test.ts:
 
 Add test cases using a fixture with TWO differently-named sub-projects
 (use "client" and "server" instead of "backend"/"frontend" this time,
@@ -726,7 +726,7 @@ whole-repo scan and bySubProject is an empty Map.
 ---
 
 6. UPDATE (or CREATE if it doesn't exist yet)
-   packages/core/src/**tests**/pipeline.test.ts:
+   packages/core/src/__tests__/pipeline.test.ts:
 
 Add a test using a fixture repo structured like the "client"/"server"
 example above, run the FULL runPipeline() (with LLM calls mocked), and
@@ -835,7 +835,7 @@ Implement packages/core/src/cache/sqlite-cache.ts:
     expose a resetStats() too.
   - close(): void — closes the underlying database handle.
 
-Write packages/core/src/**tests**/sqlite-cache.test.ts using an in-memory
+Write packages/core/src/__tests__/sqlite-cache.test.ts using an in-memory
 db (':memory:' path) covering:
 
 - set then get returns the same summary
@@ -889,7 +889,7 @@ Implement packages/core/src/llm/provider.ts:
   waitForToken() before each call, catches errors and moves to the next
   provider, throws a combined error only if all providers fail.
 
-Write packages/core/src/**tests**/llm-provider.test.ts mocking global
+Write packages/core/src/__tests__/llm-provider.test.ts mocking global
 fetch (do NOT make real API calls in tests):
 
 - GroqProvider correctly retries on a mocked 429 response
@@ -947,7 +947,7 @@ Implement packages/core/src/documentation/summarizer.ts:
   failing the whole batch. Cache every valid result. Call onProgress after
   each batch. Log final cache hit rate to auditLog.
 
-Write packages/core/src/**tests**/summarizer.test.ts mocking
+Write packages/core/src/__tests__/summarizer.test.ts mocking
 callWithFallback to return canned JSON responses:
 
 - Verify cached files produce zero LLM calls on a second run
@@ -977,7 +977,7 @@ Implement packages/core/src/documentation/citation-mapper.ts:
 
 - export function mapCitations(generatedText: string, symbolIndex:
   Map<string, Array<{path: string; line: number}>>): string
-  Uses a regex to find backtick-wrapped identifiers (`\`(\w+)\``) in the
+  Uses a regex to find backtick-wrapped identifiers (\`\`(\w+)\`\`) in the
   text. For each match, look up the identifier in symbolIndex — if found,
   append " [path:line]" using the first matching location. Leave
   unmatched identifiers untouched (never fabricate a citation).
@@ -985,7 +985,7 @@ Implement packages/core/src/documentation/citation-mapper.ts:
 Implement packages/core/src/documentation/synthesizer.ts:
 
 - Three prompt-building functions: buildReadmePrompt, buildArchitecturePrompt
-  (must instruct the model to include a ```mermaid fenced diagram AND to
+  (must instruct the model to include a \`\`\`mermaid fenced diagram AND to
   prepend this exact disclaimer as the first line: "> Note: This
   architecture diagram is an AI-generated approximation based on static
   analysis, not a guaranteed reverse-engineered UML diagram."),
@@ -1007,7 +1007,7 @@ Implement packages/core/src/documentation/synthesizer.ts:
   fallback outcome per document to auditLog. Return { readme, architecture,
   onboarding }.
 
-Write packages/core/src/**tests**/synthesizer.test.ts and
+Write packages/core/src/__tests__/synthesizer.test.ts and
 citation-mapper.test.ts mocking callWithFallback:
 
 - All 3 documents generate successfully with citations applied
@@ -1057,7 +1057,7 @@ Implement packages/core/src/pipeline.ts:
   Enforce a global 5-minute timeout using AbortController — if exceeded,
   clean up and throw a clear timeout error.
 
-Write packages/core/src/**tests**/pipeline.test.ts using a small real
+Write packages/core/src/__tests__/pipeline.test.ts using a small real
 fixture repo (5-10 files) on local disk (input.type = 'local') with ALL
 LLM calls mocked (mock callWithFallback at the module level):
 
@@ -1162,7 +1162,7 @@ INVESTIGATION STEPS (do these first, before writing any fix):
    responses, correctly returns/resolves on any 2xx response without
    throwing, and does not misclassify normal latency as a failure.
 
-4. UPDATE packages/core/src/**tests**/llm-provider.test.ts to add/fix
+4. UPDATE packages/core/src/__tests__/llm-provider.test.ts to add/fix
    these specific regression tests proving the bug is gone:
 
    - Test: when GroqProvider's complete() resolves successfully on the
@@ -1272,7 +1272,7 @@ INVESTIGATION STEPS (do these first, before writing any fix):
    responses, correctly returns/resolves on any 2xx response without
    throwing, and does not misclassify normal latency as a failure.
 
-4. UPDATE packages/core/src/**tests**/llm-provider.test.ts to add/fix
+4. UPDATE packages/core/src/__tests__/llm-provider.test.ts to add/fix
    these specific regression tests proving the bug is gone:
 
    - Test: when GroqProvider's complete() resolves successfully on the
@@ -1363,7 +1363,7 @@ Implement packages/core/src/agent/tools.ts:
      matching "path:line" entries.
 - export const TOOLS: AgentTool[] — array of all 5 tools above.
 
-Write packages/core/src/**tests**/agent-tools.test.ts using a fixture
+Write packages/core/src/__tests__/agent-tools.test.ts using a fixture
 sandbox directory:
 
 - read_file returns real content on first call, then returns the
@@ -1444,7 +1444,7 @@ Implement packages/core/src/agent/investigator.ts:
   InvestigationResult including reasoningTrace and filesExamined (derived
   from session.visitedFiles keys touched during this call).
 
-Write packages/core/src/**tests**/investigator.test.ts mocking
+Write packages/core/src/__tests__/investigator.test.ts mocking
 callWithFallback to return scripted decisions:
 
 - A scripted sequence of 3 tool calls followed by 'finish' produces a
@@ -1685,7 +1685,7 @@ call count.
 
 5. UPDATE any existing tests that reference the old single-provider-chain
    investigate() signature or the old MAX_ITERATIONS value of 10
-   (packages/core/src/**tests**/investigator.test.ts and any other affected
+   (packages/core/src/__tests__/investigator.test.ts and any other affected
    test files) so they pass with the new dual-chain signature and the new
    cap of 6. Specifically update the "max iteration cap" test to assert it
    stops at 6, not 10.
@@ -1789,7 +1789,7 @@ Wire up commander: program.command('analyze <target>').option('--token
 (runAskCommand). Add a bin entry "sleuth": "./dist/index.js" with a
 shebang line in packages/cli/package.json.
 
-Write packages/cli/src/**tests**/cli.test.ts mocking runPipeline and
+Write packages/cli/src/__tests__/cli.test.ts mocking runPipeline and
 investigate (do not hit real network/LLM):
 
 - analyze command writes all 3 markdown files to the expected output dir
@@ -2090,7 +2090,7 @@ a global error-handling middleware that redacts secrets before logging
 and returns { error: message }, start the session reaper, listen on
 process.env.PORT.
 
-Write packages/api/src/**tests**/api.test.ts using supertest, mocking
+Write packages/api/src/__tests__/api.test.ts using supertest, mocking
 runPipeline and investigate:
 
 - Full flow: POST /analyze → poll /status until complete → GET /results
@@ -2384,7 +2384,7 @@ Constraints:
 - Preserve all existing public function signatures used elsewhere in the
   codebase unless a signature change is strictly necessary — if it is,
   update every call site and explain why in a code comment.
-- Add unit tests (packages/core/src/llm/**tests**/rate-limiter.test.ts)
+- Add unit tests (packages/core/src/llm/__tests__/rate-limiter.test.ts)
   covering: (a) oversized single request never hangs and resolves via debt
   path, (b) hardWaitTimeoutMs correctly throws RateLimitEscalationError,
   (c) watchdog does NOT fire during a legitimate 30s rate-limited wait but
@@ -2489,7 +2489,7 @@ Express app, cors middleware restricted to [process.env.WEB_ORIGIN,
 { error: message }, start the session reaper, listen on
 process.env.PORT.
 
-Write packages/api/src/**tests**/api.test.ts using supertest, mocking
+Write packages/api/src/__tests__/api.test.ts using supertest, mocking
 runPipeline and investigate:
 
 - Full flow: POST /analyze → poll /status until complete → GET
