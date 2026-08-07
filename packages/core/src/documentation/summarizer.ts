@@ -17,7 +17,15 @@ const SUMMARIZER_TEMPERATURE = 0.2;
 // just lets that many requests be queued/in-flight at once instead of
 // forcing one full round-trip to finish before the next begins, which is the
 // single biggest lever for cutting wall-clock time on large repos.
-const MAX_CONCURRENT_BATCHES = 6;
+// Lowered from 6 to 3 (immediate stopgap): a fresh free-tier Groq account's
+// real tokens-per-minute ceiling (confirmed live: 6000 TPM for
+// llama-3.1-8b-instant) is easily blown through by 6 concurrent batches each
+// carrying up to MAX_BATCH_CHARS of source plus SUMMARIZER_MAX_TOKENS of
+// output — the rate limiter at the time had no TPM awareness at all to catch
+// this before firing. See llm/rate-limiter.ts's PROVIDER_RATE_LIMITS for the
+// real fix (TPM-aware gating); this halving is a cheap, independent
+// mitigation kept as its own commit so it can be reverted on its own.
+const MAX_CONCURRENT_BATCHES = 3;
 
 export interface SummarizeFilesResult {
   summaries: FileSummary[];

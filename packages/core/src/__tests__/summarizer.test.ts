@@ -200,7 +200,7 @@ describe('summarizeFiles', () => {
     const contentCache = new Map<string, string>();
     const files: FileNode[] = [];
 
-    // 40 files at 5/batch -> 8 batches, more than the concurrency cap (6).
+    // 40 files at 5/batch -> 8 batches, more than the concurrency cap (3).
     for (let i = 0; i < 40; i += 1) {
       const path = `src/many-${i}.ts`;
 
