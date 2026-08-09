@@ -1,5 +1,13 @@
 import type { SummaryCache } from '../cache/sqlite-cache';
-import { SUMMARIZER_MAX_BATCH_CHARS, SUMMARIZER_MAX_BATCH_FILES, SUMMARIZER_MAX_CONCURRENT_BATCHES, SUMMARIZER_MAX_TOKENS, SUMMARIZER_PROMPT_VERSION, SUMMARIZER_TEMPERATURE } from '../constants';
+import {
+  SUMMARIZER_FALLBACK_PURPOSE,
+  SUMMARIZER_MAX_BATCH_CHARS,
+  SUMMARIZER_MAX_BATCH_FILES,
+  SUMMARIZER_MAX_CONCURRENT_BATCHES,
+  SUMMARIZER_MAX_TOKENS,
+  SUMMARIZER_PROMPT_VERSION,
+  SUMMARIZER_TEMPERATURE,
+} from '../constants';
 import { callWithFallback } from '../llm/provider';
 import type { TokenBucketRateLimiter } from '../llm/rate-limiter';
 import { FileSummarySchema } from '../schemas';
@@ -12,7 +20,7 @@ export type { SummarizeFilesResult } from '../types';
 function fallbackSummary(path: string): FileSummary {
   return {
     path,
-    purpose: 'Could not summarize',
+    purpose: SUMMARIZER_FALLBACK_PURPOSE,
     exports: [],
     dependencies: [],
     summary: 'Parse error',

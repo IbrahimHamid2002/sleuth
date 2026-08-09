@@ -31,6 +31,15 @@ export const FastPathAnswerSchema = z.object({
   answer: z.string().optional(),
 });
 
+// documentation/synthesizer.ts's exit path for every README/ARCHITECTURE/
+// ONBOARDING LLM call (CLAUDE.md §2 rule 5: every LLM call site needs a
+// Zod-validated exit path). Synthesis output is free-form Markdown, not
+// structured JSON, so this is deliberately loose — it only guards the one
+// real failure mode raw text can have (blank/whitespace-only), never
+// rejecting genuine prose. A tighter schema here would risk exactly the
+// false-negative-into-fallback failure mode this task investigated.
+export const SynthesisDocumentSchema = z.string().trim().min(1, 'synthesis output is empty or whitespace-only');
+
 export const ToolArgsSchemas = {
   read_file: z.object({
     path: z.string(),
