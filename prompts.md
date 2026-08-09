@@ -3825,3 +3825,176 @@ REPORT BACK:
 - Any deviations from this specification and why
 
 ---
+
+## Fix ARCHITECTURE.md Diagram Types, Headings & Duplication
+
+### Goal
+Fix a confirmed bug where the ARCHITECTURE.md synthesis prompt doesn't enforce which Mermaid diagram type belongs under which heading and allows duplicate/overlapping sections, by rewriting the prompt to a strict 5-section structure, adding a structural validator, and wiring a cheapest-first repair/fallback chain into the synthesizer.
+
+### User Prompt
+TASK 22A — Fix ARCHITECTURE.md Diagram Types, Headings & Duplication
+
+
+Suggested branch: fix/architecture-diagram-types
+Firstly checkout to the suggested branch.
+Read CLAUDE.md Sections 1, 2, 3, 4, and 5 in full. Read PRD.md Section
+4.6 (documentation generation, Mermaid diagram requirement). Read
+ARCHITECTURE.md Section 3 (documentation/ module files). Do NOT
+deviate from these.
+
+BUG REPORT (confirmed via real generated output on a live repository):
+The current ARCHITECTURE.md synthesis prompt does not enforce which
+Mermaid diagram TYPE must appear under which heading, and does not
+prevent duplicate/overlapping sections. This produces three concrete
+defects:
+
+1. The "High-Level System Diagram" heading is being filled with a
+   `flowchart` Mermaid block when it should be a `graph` block — a
+   high-level component overview, not a flowchart.
+2. There is no guaranteed diagram type for "Component Relation Graph"
+   — it must ALWAYS be a `graph` type Mermaid block, never a
+   `flowchart` or `sequenceDiagram`.
+3. Two separate headings — "Frontend Data Flow Chart" and "Backend
+   Flow Chart" — are both being filled with near-identical
+   `sequenceDiagram` content, producing redundant, duplicate
+   information in the final document.
+4. There is currently no final, dedicated "System Flowchart" section
+   at the end of the document showing the complete end-to-end system
+   flow using an actual `flowchart` Mermaid block.
+
+REQUIRED FIX — exact target section structure for ARCHITECTURE.md,
+in this exact order, going forward:
+
+1. "## High-Level System Diagram"
+   - MUST contain exactly one Mermaid code block opening with
+     `graph TD` (or `graph LR` if genuinely more readable for a wide
+     system) — NEVER `flowchart` or `sequenceDiagram`.
+   - Shows major system components (e.g. Frontend, API, Database,
+     Auth, services) and their high-level relationships only — not a
+     step-by-step process.
+
+2. "## Components" — prose only, no diagram, unchanged from current
+   behavior.
+
+3. "## Component Relation Graph"
+   - MUST contain exactly one Mermaid code block opening with
+     `graph TD` — NEVER `flowchart` or `sequenceDiagram`.
+   - If the repository has a clear frontend/backend split, this may
+     cover the frontend's internal component relationships (as it
+     currently does), but the diagram type constraint is non-negotiable
+     regardless of repo shape.
+
+4. "## System Sequence Diagram" (RENAMED AND MERGED — replaces both
+   the old "Frontend Data Flow Chart" and "Backend Flow Chart"
+   headings, which must no longer both be independently generated)
+   - MUST contain exactly one Mermaid code block opening with
+     `sequenceDiagram`.
+   - This single diagram must represent the full request lifecycle
+     end-to-end (user → frontend → API → middleware/handler →
+     database → back up the chain) as ONE coherent sequence, not two
+     separate near-duplicate diagrams. If the synthesizer currently
+     generates these as two independent LLM-derived sections, merge
+     the underlying prompt logic so only one combined sequence diagram
+     is requested and rendered.
+
+5. "## System Flowchart" (NEW — final section, must be last)
+   - MUST contain exactly one Mermaid code block opening with
+     `flowchart TD`.
+   - Represents the complete system's operational flow end-to-end
+     (e.g. ingestion/startup → routing → business logic → data
+     persistence → response), as a genuine flowchart (decision/process
+     shapes), not a component graph and not a sequence diagram.
+   - Nothing else may appear under this heading except the single
+     flowchart Mermaid block and, if needed, one short introductory
+     sentence directly above the code block — no additional
+     sub-sections, no additional diagrams.
+
+IMPLEMENTATION:
+
+Locate the actual prompt template(s) used to generate ARCHITECTURE.md
+content in packages/core/src/documentation/synthesizer.ts (and
+packages/core/src/constants.ts if prompt strings have already been
+centralized there per the types/constants consolidation described in
+ARCHITECTURE.md Section 6). Rewrite the prompt so it EXPLICITLY
+enumerates, in order, the five required headings above, and for each
+one states the exact required Mermaid diagram type as a hard
+constraint, with an instruction that the model must not invent
+additional headings, must not duplicate diagram types across sections,
+and must not omit the final "System Flowchart" section.
+
+Update packages/core/src/documentation/mermaid-validator.ts so it does
+more than generic Mermaid syntax validation — add a new exported
+function (name it clearly, e.g. `validateArchitectureDiagramTypes` or
+similar self-explanatory name) that:
+- Parses the generated ARCHITECTURE.md content.
+- For each of the five required headings, extracts the Mermaid code
+  block immediately following it (if any).
+- Verifies the code block's opening keyword matches the required type
+  for that heading (graph / graph / sequenceDiagram / flowchart per
+  the table above).
+- If a heading is missing its diagram, or the diagram type is wrong,
+  or the "System Sequence Diagram" section is duplicated into two
+  separate headings, return a structured validation failure result
+  (not just a boolean) describing exactly what is wrong and which
+  heading it relates to.
+
+Wire this new validation into synthesizer.ts's existing repair/retry
+flow: if validation fails after the LLM's first attempt, attempt one
+repair pass (either by re-prompting the LLM with the specific
+validation errors appended as corrective instructions, or by using the
+existing heuristic repair logic in mermaid-validator.ts if it can
+mechanically fix a wrong keyword, e.g. swapping `flowchart` to `graph`
+in a case where the rest of the diagram body is already valid
+graph-syntax). If repair still fails, fall back to the deterministic
+template path (do NOT let a structurally wrong document ship silently
+as if it were correct).
+
+Update or add Zod schema / type in packages/core/src/types.ts and
+packages/core/src/schemas.ts if a structured validation result type is
+introduced, following the existing labeling convention (comment noting
+it came from mermaid-validator.ts).
+
+TESTING (write these BEFORE finalizing implementation, per CLAUDE.md
+Section 2 rule 6 — dry-run before wet-run):
+In packages/core/src/__tests__/mermaid-validator.test.ts, add tests
+that:
+- Feed in a mock ARCHITECTURE.md string where "High-Level System
+  Diagram" incorrectly contains a `flowchart` block, and assert the
+  validator flags it.
+- Feed in a mock document where both "Frontend Data Flow Chart" and
+  "Backend Flow Chart" headings exist (the old, buggy structure), and
+  assert the validator flags this as a structural violation.
+- Feed in a mock document matching the new correct 5-section structure
+  with correct diagram types, and assert it passes validation cleanly.
+- Feed in a document missing the final "System Flowchart" section
+  entirely, and assert it is flagged as missing.
+
+In packages/core/src/__tests__/synthesizer.test.ts, add/update tests
+that:
+- Mock the LLM response for ARCHITECTURE.md synthesis with the new
+  correct 5-heading structure, and assert the synthesizer accepts it
+  and returns it as-is.
+- Mock an LLM response with the old, buggy structure (duplicate
+  sequence headings, wrong diagram types), and assert the synthesizer
+  either triggers the repair path or falls back to the deterministic
+  template — verify it never ships the buggy structure unmodified.
+
+Run the auto-lint skill (per CLAUDE.md rule 6) scoped to packages/core,
+and resolve any remaining errors manually.
+
+Append this complete prompt verbatim to prompts.md using the exact
+format required by CLAUDE.md rule 5.
+
+REPORT BACK:
+- Files changed
+- Exact new prompt template wording used for ARCHITECTURE.md synthesis
+- New validation function added and its exact behavior
+- Tests added and their results
+- Confirmation (with a real or mocked sample) that the 5-section
+  structure with correct diagram types is now produced correctly
+- Any deviations from this specification and why
+
+If this task seems to require touching files beyond the approved
+target list, STOP and flag it before proceeding.
+
+---

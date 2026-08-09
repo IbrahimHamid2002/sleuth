@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { validateArchitectureDiagramTypes } from '../documentation/mermaid-validator';
 import {
   buildArchitecturePrompt,
   buildReadmePrompt,
@@ -73,13 +74,83 @@ const VALID_ARCHITECTURE_DOC = `${MERMAID_DISCLAIMER}
 ## High-Level System Diagram
 
 \`\`\`mermaid
+graph TD
+  A["Entry"] --> B["Core"]
+\`\`\`
+
+## Components
+
+See \`foo\`.
+
+## Component Relation Graph
+
+\`\`\`mermaid
+graph TD
+  A["Entry"] --> B["Core"]
+\`\`\`
+
+## System Sequence Diagram
+
+\`\`\`mermaid
+sequenceDiagram
+  User->>Core: request
+  Core-->>User: response
+\`\`\`
+
+## System Flowchart
+
+\`\`\`mermaid
+flowchart TD
+  Start(["Start"]) --> End(["End"])
+\`\`\``;
+
+// Old, now-retired prompt structure: duplicate frontend/backend sequence
+// sections instead of one merged "System Sequence Diagram", and the wrong
+// diagram type ("flowchart" instead of "graph") under "High-Level System
+// Diagram" — the exact two defects TASK 22A fixes.
+const LEGACY_STRUCTURE_ARCHITECTURE_DOC = `${MERMAID_DISCLAIMER}
+
+## Directory Structure
+
+\`\`\`
+├── src/
+│   └── foo.ts
+└── package.json
+\`\`\`
+
+## High-Level System Diagram
+
+\`\`\`mermaid
 flowchart TD
   A["Entry"] --> B["Core"]
 \`\`\`
 
 ## Components
 
-See \`foo\`.`;
+See \`foo\`.
+
+## Frontend Component Relation Graph
+
+\`\`\`mermaid
+graph TD
+  A["Entry"] --> B["Core"]
+\`\`\`
+
+## Frontend Data Flow Chart
+
+\`\`\`mermaid
+sequenceDiagram
+  User->>Frontend: click
+  Frontend-->>User: render
+\`\`\`
+
+## Backend Flow Chart
+
+\`\`\`mermaid
+sequenceDiagram
+  Frontend->>Backend: request
+  Backend-->>Frontend: response
+\`\`\``;
 
 describe('synthesize', () => {
   let auditLog: AuditEntry[];
@@ -262,20 +333,28 @@ describe('synthesize', () => {
     expect(readmePrompt).toContain('foo.ts');
   });
 
-  it('skips the frontend diagram sections in the prompt when no frontend framework is detected', () => {
+  it('always requires all 5 architecture sections with their fixed diagram types, regardless of detected frameworks', () => {
     const backendOnlyMeta: RepoMeta = { ...REPO_META, frameworks: ['express'] };
-    const prompt = buildArchitecturePrompt(SUMMARIES, backendOnlyMeta, 'tree');
+    const frontendOnlyMeta: RepoMeta = { ...REPO_META, frameworks: ['react'] };
 
-    expect(prompt).toContain('Not applicable — no frontend framework detected');
-    expect(prompt).not.toContain('Not applicable — no backend framework detected');
+    for (const meta of [backendOnlyMeta, frontendOnlyMeta]) {
+      const prompt = buildArchitecturePrompt(SUMMARIES, meta, 'tree');
+
+      expect(prompt).toContain('"## High-Level System Diagram" — MUST contain exactly one ```mermaid code block opening with "graph"');
+      expect(prompt).toContain('"## Component Relation Graph" — MUST contain exactly one ```mermaid code block opening with "graph"');
+      expect(prompt).toContain('"## System Sequence Diagram" — MUST contain exactly one ```mermaid code block opening with "sequenceDiagram"');
+      expect(prompt).toContain('"## System Flowchart" — this MUST be the final section');
+      expect(prompt).not.toContain('Not applicable');
+    }
   });
 
-  it('requests real frontend diagrams when a frontend framework is detected', () => {
-    const frontendMeta: RepoMeta = { ...REPO_META, frameworks: ['react'] };
-    const prompt = buildArchitecturePrompt(SUMMARIES, frontendMeta, 'tree');
+  it('instructs the model never to produce the retired duplicate/conditional headings', () => {
+    const prompt = buildArchitecturePrompt(SUMMARIES, REPO_META, 'tree');
 
-    expect(prompt).not.toContain('Not applicable — no frontend framework detected');
     expect(prompt).toContain('Frontend Component Relation Graph');
+    expect(prompt).toContain('Frontend Data Flow Chart');
+    expect(prompt).toContain('Backend Flow Chart');
+    expect(prompt).toContain('retired headings');
   });
 
   it('does not ask the LLM for a README License or Project Structure section — that content lives in ARCHITECTURE.md', () => {
@@ -297,22 +376,17 @@ describe('synthesize', () => {
   });
 
   it('repairs an invalid Mermaid diagram via one LLM call and splices in the corrected version', async () => {
-    const brokenArchitectureDoc = `${MERMAID_DISCLAIMER}
-
-## High-Level System Diagram
-
-\`\`\`mermaid
-flowchart TD
-  A[Label: broken (oops)] --> B
-\`\`\`
-
-## Components
-
-See \`foo\`.`;
+    // Structurally complete (all 5 required sections, correct types) except
+    // for one syntactically-broken diagram — isolates Mermaid syntax repair
+    // from the separate structural-validation pass tested below.
+    const brokenArchitectureDoc = VALID_ARCHITECTURE_DOC.replace(
+      '```mermaid\ngraph TD\n  A["Entry"] --> B["Core"]\n```\n\n## Components',
+      '```mermaid\ngraph TD\n  A[Label: broken (oops)] --> B\n```\n\n## Components',
+    );
 
     callWithFallback.mockImplementation(async (_providers, prompt: string) => {
       if (prompt.includes('<broken_mermaid>')) {
-        return 'flowchart TD\n  A["Label: fixed"] --> B["Node"]';
+        return 'graph TD\n  A["Label: fixed"] --> B["Node"]';
       }
 
       const docType = promptDocType(prompt);
@@ -328,30 +402,34 @@ See \`foo\`.`;
 
     expect(result.architecture).toContain('A["Label: fixed"] --> B["Node"]');
     expect(result.architecture).not.toContain('Label: broken (oops)');
+    expect(validateArchitectureDiagramTypes(result.architecture).valid).toBe(true);
 
     const repairedEntries = auditLog.filter((entry) => entry.action === 'mermaid_repaired');
 
     expect(repairedEntries).toHaveLength(1);
+    // The syntax fix alone already satisfies the structural contract (the
+    // fixed diagram already opens with "graph"), so no structural-repair
+    // call is needed on top of it.
+    expect(auditLog.some((entry) => entry.action === 'architecture_structure_fallback')).toBe(false);
   });
 
-  it('strips an unrepairable Mermaid diagram with a deterministic placeholder instead of shipping broken syntax', async () => {
-    const brokenArchitectureDoc = `${MERMAID_DISCLAIMER}
-
-## High-Level System Diagram
-
-\`\`\`mermaid
-flowchart TD
-  A[Label: broken (oops)] --> B
-\`\`\`
-
-## Components
-
-See \`foo\`.`;
+  it('strips an unrepairable Mermaid diagram, then structurally repairs the resulting missing-diagram violation via one re-prompt', async () => {
+    const brokenArchitectureDoc = VALID_ARCHITECTURE_DOC.replace(
+      '```mermaid\ngraph TD\n  A["Entry"] --> B["Core"]\n```\n\n## Components',
+      '```mermaid\ngraph TD\n  A[Label: broken (oops)] --> B\n```\n\n## Components',
+    );
 
     callWithFallback.mockImplementation(async (_providers, prompt: string) => {
       if (prompt.includes('<broken_mermaid>')) {
-        // The "repaired" diagram is still invalid — repair attempt fails to fix it.
+        // The "repaired" diagram is still invalid — repair attempt fails to fix it,
+        // so the block gets stripped, leaving "High-Level System Diagram" with no
+        // diagram at all — a structural violation the mermaid-syntax repair alone
+        // can't see.
         return 'A[still: broken (oops)] --> B';
+      }
+
+      if (prompt.includes('<broken_architecture_doc>')) {
+        return VALID_ARCHITECTURE_DOC;
       }
 
       const docType = promptDocType(prompt);
@@ -366,11 +444,59 @@ See \`foo\`.`;
     const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     expect(result.architecture).not.toContain('Label: broken (oops)');
-    expect(result.architecture).toContain('Diagram omitted');
+    expect(result.architecture).not.toContain('Diagram omitted');
+    expect(validateArchitectureDiagramTypes(result.architecture).valid).toBe(true);
 
     const strippedEntries = auditLog.filter((entry) => entry.action === 'mermaid_stripped');
+    const structureRepairedEntries = auditLog.filter((entry) => entry.action === 'architecture_structure_repaired');
 
     expect(strippedEntries).toHaveLength(1);
+    expect(structureRepairedEntries).toHaveLength(1);
+  });
+
+  it('never ships the old, buggy structure unmodified — repairs it or falls back to the deterministic template', async () => {
+    callWithFallback.mockImplementation(async (_providers, prompt: string) => {
+      if (prompt.includes('<broken_architecture_doc>')) {
+        return VALID_ARCHITECTURE_DOC;
+      }
+
+      const docType = promptDocType(prompt);
+
+      if (docType === 'architecture') {
+        return LEGACY_STRUCTURE_ARCHITECTURE_DOC;
+      }
+
+      return `Generated ${docType}.`;
+    });
+
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+
+    expect(validateArchitectureDiagramTypes(result.architecture).valid).toBe(true);
+    expect(result.architecture).not.toContain('## Frontend Data Flow Chart');
+    expect(result.architecture).not.toContain('## Backend Flow Chart');
+  });
+
+  it('falls back to the deterministic template when the structural repair re-prompt is also invalid', async () => {
+    callWithFallback.mockImplementation(async (_providers, prompt: string) => {
+      const docType = promptDocType(prompt);
+
+      if (docType === 'architecture') {
+        // Every attempt — initial and the one structural re-prompt — returns
+        // the same buggy structure, so repair can never succeed.
+        return LEGACY_STRUCTURE_ARCHITECTURE_DOC;
+      }
+
+      return `Generated ${docType}.`;
+    });
+
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+
+    expect(validateArchitectureDiagramTypes(result.architecture).valid).toBe(true);
+    expect(result.architecture).toContain('generated by a deterministic fallback');
+
+    const fallbackEntries = auditLog.filter((entry) => entry.action === 'architecture_structure_fallback');
+
+    expect(fallbackEntries).toHaveLength(1);
   });
 
   it('leaves a valid Mermaid diagram untouched (no repair call made)', async () => {

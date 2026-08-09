@@ -163,6 +163,36 @@ export interface MermaidValidationResult {
   errors: string[];
 }
 
+// ARCHITECTURE.md's fixed diagram-type contract per required heading — shared
+// by documentation/synthesizer.ts (to build the prompt) and
+// documentation/mermaid-validator.ts (to validate the LLM's output against
+// it), so the two can never drift apart.
+export type ArchitectureDiagramType = 'graph' | 'sequenceDiagram' | 'flowchart';
+
+export interface ArchitectureRequiredSection {
+  heading: string;
+  // null means the section is prose-only and must NOT contain a diagram.
+  diagramType: ArchitectureDiagramType | null;
+}
+
+export type ArchitectureDiagramIssueProblem =
+  | 'missing_heading'
+  | 'missing_diagram'
+  | 'wrong_diagram_type'
+  | 'duplicate_heading'
+  | 'legacy_heading_present';
+
+export interface ArchitectureDiagramIssue {
+  heading: string;
+  problem: ArchitectureDiagramIssueProblem;
+  detail: string;
+}
+
+export interface ArchitectureDiagramValidationResult {
+  valid: boolean;
+  issues: ArchitectureDiagramIssue[];
+}
+
 // From documentation/summarizer.ts
 export interface SummarizeFilesResult {
   summaries: FileSummary[];

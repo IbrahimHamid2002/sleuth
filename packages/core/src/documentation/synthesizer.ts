@@ -1,35 +1,33 @@
 import {
-  DOC_SYNTHESIS_BACKEND_FRAMEWORKS,
+  ARCHITECTURE_LEGACY_HEADINGS,
+  ARCHITECTURE_REQUIRED_SECTIONS,
   DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION,
   DOC_SYNTHESIS_CALL_TIMEOUT_MS,
-  DOC_SYNTHESIS_FRONTEND_FRAMEWORKS,
   DOC_SYNTHESIS_MAX_ATTEMPTS,
   DOC_SYNTHESIS_MAX_MERMAID_REPAIR_ATTEMPTS,
   DOC_SYNTHESIS_MAX_TOKENS,
   DOC_SYNTHESIS_MERMAID_REPAIR_MAX_TOKENS,
   DOC_SYNTHESIS_MERMAID_REPAIR_TEMPERATURE,
   DOC_SYNTHESIS_MERMAID_SYNTAX_RULES,
+  DOC_SYNTHESIS_STRUCTURE_REPAIR_TEMPERATURE,
   DOC_SYNTHESIS_SUMMARY_CHAR_BUDGET,
   DOC_SYNTHESIS_TEMPERATURE,
   MERMAID_DISCLAIMER,
 } from '../constants';
 import { callWithFallback } from '../llm/provider';
 import type { TokenBucketRateLimiter } from '../llm/rate-limiter';
-import type { AuditEntry, DocType, FileNode, FileSummary, LLMProvider, RepoMeta, SynthesisResult } from '../types';
+import type { ArchitectureDiagramIssue, AuditEntry, DocType, FileNode, FileSummary, LLMProvider, RepoMeta, SynthesisResult } from '../types';
 
 import { mapCitations } from './citation-mapper';
 import { buildDirectoryTree } from './directory-tree';
-import { extractMermaidBlocks, validateMermaidSyntax } from './mermaid-validator';
+import {
+  extractMermaidBlocks,
+  repairArchitectureDiagramTypesMechanically,
+  validateArchitectureDiagramTypes,
+  validateMermaidSyntax,
+} from './mermaid-validator';
 
 export { MERMAID_DISCLAIMER } from '../constants';
-
-function hasFrontendFramework(frameworks: string[]): boolean {
-  return frameworks.some((framework) => DOC_SYNTHESIS_FRONTEND_FRAMEWORKS.has(framework.toLowerCase()));
-}
-
-function hasBackendFramework(frameworks: string[]): boolean {
-  return frameworks.some((framework) => DOC_SYNTHESIS_BACKEND_FRAMEWORKS.has(framework.toLowerCase()));
-}
 
 function truncateSummariesToBudget(summaries: FileSummary[], budgetChars: number): FileSummary[] {
   const truncated: FileSummary[] = [];
@@ -96,13 +94,32 @@ Do NOT include a "## Project Structure" or "## Directory Structure" section — 
 ${DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION} Output ONLY the Markdown document, no commentary before or after it.`;
 }
 
+// Single source of truth for the "produce these 5 sections, in this exact
+// order, with these exact diagram types" instructions — used by both the
+// initial synthesis prompt and the structural-repair re-prompt, so the two
+// can never describe a different contract than documentation/
+// mermaid-validator.ts's validateArchitectureDiagramTypes() actually checks.
+function buildArchitectureSectionRequirementsBlock(): string {
+  const [highLevel, components, componentRelation, sequence, flowchart] = ARCHITECTURE_REQUIRED_SECTIONS;
+
+  return `Produce EXACTLY these 5 sections, in this exact order, with no additional headings and no omissions:
+
+1. "## ${highLevel!.heading}" — MUST contain exactly one \`\`\`mermaid code block opening with "${highLevel!.diagramType}" (e.g. "graph TD") — NEVER "flowchart" and NEVER "sequenceDiagram". Show the major system components (e.g. CLI/Web, API, Core engine, Database, external services) and their high-level relationships only — this is a component overview, not a step-by-step process.
+
+2. "## ${components!.heading}" — prose only, no diagram. Describe the major components and how they relate. ${DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION}
+
+3. "## ${componentRelation!.heading}" — MUST contain exactly one \`\`\`mermaid code block opening with "${componentRelation!.diagramType}" — NEVER "flowchart" and NEVER "sequenceDiagram". Show how the repository's internal components relate to each other (parent/child, composition, or data-passing relationships), grounded only in components evident from the summaries. If the repository has a clear frontend/backend split, this may focus on the frontend's internal component relationships; the diagram type requirement applies regardless of repo shape.
+
+4. "## ${sequence!.heading}" — MUST contain exactly one \`\`\`mermaid code block opening with "${sequence!.diagramType}". Represent the full request/operation lifecycle end-to-end as ONE coherent sequence (e.g. user → entrypoint → core logic → data layer → back up the chain) — do NOT split this into separate frontend and backend diagrams; there must be only one sequence diagram in the whole document.
+
+5. "## ${flowchart!.heading}" — this MUST be the final section of the document. MUST contain exactly one \`\`\`mermaid code block opening with "${flowchart!.diagramType}" (e.g. "flowchart TD") — NEVER "graph" and NEVER "sequenceDiagram". Represent the complete system's operational flow end-to-end (e.g. ingestion/startup → routing → business logic → data persistence → response) using genuine flowchart decision/process shapes — this is a process flow, not a component graph. Nothing else may appear under this heading except one short introductory sentence and the single flowchart code block — no sub-sections, no additional diagrams.
+
+Do NOT invent any headings beyond these 5. Do NOT reuse a diagram type across two different sections in a way that duplicates another section's content. Do NOT produce the old, retired headings "${ARCHITECTURE_LEGACY_HEADINGS.join('", "')}" — they no longer exist in this structure.`;
+}
+
 export function buildArchitecturePrompt(summaries: FileSummary[], repoMeta: RepoMeta, directoryTree: string): string {
   const summariesBlock = formatSummariesBlock(summaries);
   const frameworksLine = repoMeta.frameworks.length > 0 ? repoMeta.frameworks.join(', ') : 'none detected';
-  const frontend = hasFrontendFramework(repoMeta.frameworks);
-  const backend = hasBackendFramework(repoMeta.frameworks);
-  const frontendNotApplicable = '_Not applicable — no frontend framework detected in this repository._ (no diagram)';
-  const backendNotApplicable = '_Not applicable — no backend framework detected in this repository._ (no diagram)';
 
   return `You are generating an ARCHITECTURE.md for a code repository named "${repoMeta.name}".
 
@@ -126,24 +143,31 @@ ${directoryTree}
 
 ${DOC_SYNTHESIS_MERMAID_SYNTAX_RULES}
 
-Produce ALL of the following sections, in this exact order:
+Produce ALL of the following, in this exact order:
 
 1. The very first line of your output MUST be exactly this disclaimer, verbatim, with no modification:
 ${MERMAID_DISCLAIMER}
 
 2. "## Directory Structure" — reproduce the directory tree above VERBATIM inside a plain \`\`\` code fence (not mermaid). Do not shorten, reformat, or invent paths.
 
-3. "## High-Level System Diagram" — a \`\`\`mermaid flowchart or graph summarizing the major modules/components implied by the summaries above and how they connect.
-
-4. "## Components" — prose describing the major components and how they relate. ${DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION}
-
-5. "## Frontend Component Relation Graph" — ${frontend ? 'a ```mermaid diagram showing how the major frontend components/pages relate to each other (parent/child, composition, or data-passing relationships), grounded only in components evident from the summaries.' : frontendNotApplicable}
-
-6. "## Frontend Data Flow Chart" — ${frontend ? 'a ```mermaid diagram showing how data flows through the frontend (e.g. user action → state/store → API call → render), grounded only in what the summaries show.' : frontendNotApplicable}
-
-7. "## Backend Flow Chart" — ${backend ? 'a ```mermaid diagram showing the backend request/processing flow (e.g. route → middleware → handler → data layer → response), grounded only in what the summaries show.' : backendNotApplicable}
+${buildArchitectureSectionRequirementsBlock()}
 
 Output ONLY the Markdown document, no commentary before or after it.`;
+}
+
+function buildArchitectureStructureRepairPrompt(markdown: string, issues: ArchitectureDiagramIssue[]): string {
+  return `The following ARCHITECTURE.md content violates required structural rules and must be corrected:
+
+<broken_architecture_doc>
+${markdown}
+</broken_architecture_doc>
+
+Structural violations found:
+${issues.map((issue) => `- "## ${issue.heading}": ${issue.detail}`).join('\n')}
+
+${buildArchitectureSectionRequirementsBlock()}
+
+Return the COMPLETE corrected ARCHITECTURE.md document — every section (including the disclaimer, "## Directory Structure", and any sections that were already correct), not just the fixed ones. No commentary before or after it.`;
 }
 
 export function buildOnboardingPrompt(summaries: FileSummary[], repoMeta: RepoMeta): string {
@@ -212,13 +236,20 @@ See ONBOARDING.md for full setup instructions. Quick start: \`${repoMeta.package
 
 function generateArchitectureFallback(summaries: FileSummary[], repoMeta: RepoMeta, directoryTree: string): string {
   const topSummaries = summaries.slice(0, 15);
-  const nodes = topSummaries.map((summary, index) => `  Repo --> F${index}["${summary.path}"]`).join('\n');
+  const componentNodes = topSummaries.map((summary, index) => `  Repo --> F${index}["${summary.path}"]`).join('\n');
   const componentList = topSummaries.map((summary) => `- \`${summary.path}\`: ${summary.purpose}`).join('\n');
-  const frontend = hasFrontendFramework(repoMeta.frameworks);
-  const backend = hasBackendFramework(repoMeta.frameworks);
-  const notGenerated = '_Not applicable — this diagram requires the AI-generated document, which could not be produced (fallback mode)._';
-  const frontendNotApplicable = '_Not applicable — no frontend framework detected in this repository._';
-  const backendNotApplicable = '_Not applicable — no backend framework detected in this repository._';
+  // Chains each component to the next in list order — not a real dependency
+  // graph, just a deterministic, always-valid stand-in for when the
+  // AI-generated relation graph could not be produced.
+  const relationNodes = topSummaries
+    .map((summary, index) => {
+      const next = topSummaries[index + 1];
+
+      return next ? `  C${index}["${summary.path}"] --> C${index + 1}["${next.path}"]` : `  C${index}["${summary.path}"]`;
+    })
+    .join('\n');
+  const entryPoints = repoMeta.subProjects.flatMap((subProject) => subProject.entryPoints);
+  const entryPointLabel = entryPoints[0] ?? 'the application entry point';
 
   return `${MERMAID_DISCLAIMER}
 
@@ -235,26 +266,40 @@ ${directoryTree}
 ## High-Level System Diagram
 
 \`\`\`mermaid
-flowchart TD
+graph TD
   Repo["${repoMeta.name}"]
-${nodes || '  Repo --> None["no summarized files available"]'}
+${componentNodes || '  Repo --> None["no summarized files available"]'}
 \`\`\`
 
 ## Components
 
 ${componentList || '_No summarized files available._'}
 
-## Frontend Component Relation Graph
+## Component Relation Graph
 
-${frontend ? notGenerated : frontendNotApplicable}
+\`\`\`mermaid
+graph TD
+${relationNodes || '  None["no summarized files available"]'}
+\`\`\`
 
-## Frontend Data Flow Chart
+## System Sequence Diagram
 
-${frontend ? notGenerated : frontendNotApplicable}
+\`\`\`mermaid
+sequenceDiagram
+  User->>Entry: invoke ${entryPointLabel}
+  Entry->>Core: process
+  Core-->>Entry: result
+  Entry-->>User: response
+\`\`\`
 
-## Backend Flow Chart
+## System Flowchart
 
-${backend ? notGenerated : backendNotApplicable}
+\`\`\`mermaid
+flowchart TD
+  Start(["Start"]) --> Entry["${entryPointLabel}"]
+  Entry --> Process["Core processing"]
+  Process --> End(["Response"])
+\`\`\`
 `;
 }
 
@@ -455,6 +500,88 @@ async function repairInvalidMermaidBlocks(
   return result;
 }
 
+// Structural safety net, layered after repairInvalidMermaidBlocks: a
+// syntactically-valid Mermaid document can still have the wrong diagram type
+// under a heading, a missing "System Flowchart", or a reverted duplicate
+// legacy heading. Fixes cheapest-first — deterministic keyword swap, then one
+// LLM re-prompt, then the deterministic template — so a structurally wrong
+// document is never shipped silently as if it were correct.
+async function enforceArchitectureStructure(
+  markdown: string,
+  summaries: FileSummary[],
+  repoMeta: RepoMeta,
+  directoryTree: string,
+  symbolIndex: Map<string, Array<{ path: string; line: number }>>,
+  providers: LLMProvider[],
+  rateLimiters: Map<string, TokenBucketRateLimiter>,
+  auditLog: AuditEntry[],
+  signal?: AbortSignal,
+): Promise<string> {
+  const initialValidation = validateArchitectureDiagramTypes(markdown);
+
+  if (initialValidation.valid) {
+    return markdown;
+  }
+
+  const mechanicallyFixed = repairArchitectureDiagramTypesMechanically(markdown, initialValidation.issues);
+  const afterMechanicalFix = validateArchitectureDiagramTypes(mechanicallyFixed);
+
+  if (afterMechanicalFix.valid) {
+    auditLog.push({
+      timestamp: Date.now(),
+      stage: 'synthesis',
+      action: 'architecture_structure_repaired',
+      detail: `Mechanically corrected diagram type keyword(s): ${initialValidation.issues.map((issue) => `"${issue.heading}" (${issue.problem})`).join('; ')}`,
+    });
+
+    return mechanicallyFixed;
+  }
+
+  try {
+    const rawRepair = await callWithRetryAndTimeout(
+      providers,
+      buildArchitectureStructureRepairPrompt(mechanicallyFixed, afterMechanicalFix.issues),
+      { maxTokens: DOC_SYNTHESIS_MAX_TOKENS, temperature: DOC_SYNTHESIS_STRUCTURE_REPAIR_TEMPERATURE },
+      rateLimiters,
+      signal,
+    );
+    let repaired = mapCitations(rawRepair, symbolIndex);
+
+    repaired = await repairInvalidMermaidBlocks(repaired, providers, rateLimiters, auditLog, signal);
+
+    const revalidation = validateArchitectureDiagramTypes(repaired);
+
+    if (revalidation.valid) {
+      auditLog.push({
+        timestamp: Date.now(),
+        stage: 'synthesis',
+        action: 'architecture_structure_repaired',
+        detail: `Repaired via LLM re-prompt: ${afterMechanicalFix.issues.map((issue) => issue.detail).join('; ')}`,
+      });
+
+      return repaired;
+    }
+
+    auditLog.push({
+      timestamp: Date.now(),
+      stage: 'synthesis',
+      action: 'architecture_structure_fallback',
+      detail: `Structural repair re-prompt still invalid, falling back to deterministic template: ${revalidation.issues.map((issue) => issue.detail).join('; ')}`,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    auditLog.push({
+      timestamp: Date.now(),
+      stage: 'synthesis',
+      action: 'architecture_structure_fallback',
+      detail: `Structural repair LLM call failed, falling back to deterministic template: ${message}`,
+    });
+  }
+
+  return generateArchitectureFallback(summaries, repoMeta, directoryTree);
+}
+
 export async function synthesize(
   summaries: FileSummary[],
   repoMeta: RepoMeta,
@@ -504,6 +631,17 @@ export async function synthesize(
 
       if (docType === 'architecture') {
         content = await repairInvalidMermaidBlocks(content, providers, rateLimiters, auditLog, signal);
+        content = await enforceArchitectureStructure(
+          content,
+          budgeted,
+          repoMeta,
+          directoryTree,
+          symbolIndex,
+          providers,
+          rateLimiters,
+          auditLog,
+          signal,
+        );
       }
 
       results[docType] = content;
