@@ -3825,3 +3825,363 @@ REPORT BACK:
 - Any deviations from this specification and why
 
 ---
+
+## Fix ARCHITECTURE.md Diagram Types, Headings & Duplication
+
+### Goal
+Fix a confirmed bug where the ARCHITECTURE.md synthesis prompt doesn't enforce which Mermaid diagram type belongs under which heading and allows duplicate/overlapping sections, by rewriting the prompt to a strict 5-section structure, adding a structural validator, and wiring a cheapest-first repair/fallback chain into the synthesizer.
+
+### User Prompt
+TASK 22A — Fix ARCHITECTURE.md Diagram Types, Headings & Duplication
+
+
+Suggested branch: fix/architecture-diagram-types
+Firstly checkout to the suggested branch.
+Read CLAUDE.md Sections 1, 2, 3, 4, and 5 in full. Read PRD.md Section
+4.6 (documentation generation, Mermaid diagram requirement). Read
+ARCHITECTURE.md Section 3 (documentation/ module files). Do NOT
+deviate from these.
+
+BUG REPORT (confirmed via real generated output on a live repository):
+The current ARCHITECTURE.md synthesis prompt does not enforce which
+Mermaid diagram TYPE must appear under which heading, and does not
+prevent duplicate/overlapping sections. This produces three concrete
+defects:
+
+1. The "High-Level System Diagram" heading is being filled with a
+   `flowchart` Mermaid block when it should be a `graph` block — a
+   high-level component overview, not a flowchart.
+2. There is no guaranteed diagram type for "Component Relation Graph"
+   — it must ALWAYS be a `graph` type Mermaid block, never a
+   `flowchart` or `sequenceDiagram`.
+3. Two separate headings — "Frontend Data Flow Chart" and "Backend
+   Flow Chart" — are both being filled with near-identical
+   `sequenceDiagram` content, producing redundant, duplicate
+   information in the final document.
+4. There is currently no final, dedicated "System Flowchart" section
+   at the end of the document showing the complete end-to-end system
+   flow using an actual `flowchart` Mermaid block.
+
+REQUIRED FIX — exact target section structure for ARCHITECTURE.md,
+in this exact order, going forward:
+
+1. "## High-Level System Diagram"
+   - MUST contain exactly one Mermaid code block opening with
+     `graph TD` (or `graph LR` if genuinely more readable for a wide
+     system) — NEVER `flowchart` or `sequenceDiagram`.
+   - Shows major system components (e.g. Frontend, API, Database,
+     Auth, services) and their high-level relationships only — not a
+     step-by-step process.
+
+2. "## Components" — prose only, no diagram, unchanged from current
+   behavior.
+
+3. "## Component Relation Graph"
+   - MUST contain exactly one Mermaid code block opening with
+     `graph TD` — NEVER `flowchart` or `sequenceDiagram`.
+   - If the repository has a clear frontend/backend split, this may
+     cover the frontend's internal component relationships (as it
+     currently does), but the diagram type constraint is non-negotiable
+     regardless of repo shape.
+
+4. "## System Sequence Diagram" (RENAMED AND MERGED — replaces both
+   the old "Frontend Data Flow Chart" and "Backend Flow Chart"
+   headings, which must no longer both be independently generated)
+   - MUST contain exactly one Mermaid code block opening with
+     `sequenceDiagram`.
+   - This single diagram must represent the full request lifecycle
+     end-to-end (user → frontend → API → middleware/handler →
+     database → back up the chain) as ONE coherent sequence, not two
+     separate near-duplicate diagrams. If the synthesizer currently
+     generates these as two independent LLM-derived sections, merge
+     the underlying prompt logic so only one combined sequence diagram
+     is requested and rendered.
+
+5. "## System Flowchart" (NEW — final section, must be last)
+   - MUST contain exactly one Mermaid code block opening with
+     `flowchart TD`.
+   - Represents the complete system's operational flow end-to-end
+     (e.g. ingestion/startup → routing → business logic → data
+     persistence → response), as a genuine flowchart (decision/process
+     shapes), not a component graph and not a sequence diagram.
+   - Nothing else may appear under this heading except the single
+     flowchart Mermaid block and, if needed, one short introductory
+     sentence directly above the code block — no additional
+     sub-sections, no additional diagrams.
+
+IMPLEMENTATION:
+
+Locate the actual prompt template(s) used to generate ARCHITECTURE.md
+content in packages/core/src/documentation/synthesizer.ts (and
+packages/core/src/constants.ts if prompt strings have already been
+centralized there per the types/constants consolidation described in
+ARCHITECTURE.md Section 6). Rewrite the prompt so it EXPLICITLY
+enumerates, in order, the five required headings above, and for each
+one states the exact required Mermaid diagram type as a hard
+constraint, with an instruction that the model must not invent
+additional headings, must not duplicate diagram types across sections,
+and must not omit the final "System Flowchart" section.
+
+Update packages/core/src/documentation/mermaid-validator.ts so it does
+more than generic Mermaid syntax validation — add a new exported
+function (name it clearly, e.g. `validateArchitectureDiagramTypes` or
+similar self-explanatory name) that:
+- Parses the generated ARCHITECTURE.md content.
+- For each of the five required headings, extracts the Mermaid code
+  block immediately following it (if any).
+- Verifies the code block's opening keyword matches the required type
+  for that heading (graph / graph / sequenceDiagram / flowchart per
+  the table above).
+- If a heading is missing its diagram, or the diagram type is wrong,
+  or the "System Sequence Diagram" section is duplicated into two
+  separate headings, return a structured validation failure result
+  (not just a boolean) describing exactly what is wrong and which
+  heading it relates to.
+
+Wire this new validation into synthesizer.ts's existing repair/retry
+flow: if validation fails after the LLM's first attempt, attempt one
+repair pass (either by re-prompting the LLM with the specific
+validation errors appended as corrective instructions, or by using the
+existing heuristic repair logic in mermaid-validator.ts if it can
+mechanically fix a wrong keyword, e.g. swapping `flowchart` to `graph`
+in a case where the rest of the diagram body is already valid
+graph-syntax). If repair still fails, fall back to the deterministic
+template path (do NOT let a structurally wrong document ship silently
+as if it were correct).
+
+Update or add Zod schema / type in packages/core/src/types.ts and
+packages/core/src/schemas.ts if a structured validation result type is
+introduced, following the existing labeling convention (comment noting
+it came from mermaid-validator.ts).
+
+TESTING (write these BEFORE finalizing implementation, per CLAUDE.md
+Section 2 rule 6 — dry-run before wet-run):
+In packages/core/src/__tests__/mermaid-validator.test.ts, add tests
+that:
+- Feed in a mock ARCHITECTURE.md string where "High-Level System
+  Diagram" incorrectly contains a `flowchart` block, and assert the
+  validator flags it.
+- Feed in a mock document where both "Frontend Data Flow Chart" and
+  "Backend Flow Chart" headings exist (the old, buggy structure), and
+  assert the validator flags this as a structural violation.
+- Feed in a mock document matching the new correct 5-section structure
+  with correct diagram types, and assert it passes validation cleanly.
+- Feed in a document missing the final "System Flowchart" section
+  entirely, and assert it is flagged as missing.
+
+In packages/core/src/__tests__/synthesizer.test.ts, add/update tests
+that:
+- Mock the LLM response for ARCHITECTURE.md synthesis with the new
+  correct 5-heading structure, and assert the synthesizer accepts it
+  and returns it as-is.
+- Mock an LLM response with the old, buggy structure (duplicate
+  sequence headings, wrong diagram types), and assert the synthesizer
+  either triggers the repair path or falls back to the deterministic
+  template — verify it never ships the buggy structure unmodified.
+
+Run the auto-lint skill (per CLAUDE.md rule 6) scoped to packages/core,
+and resolve any remaining errors manually.
+
+Append this complete prompt verbatim to prompts.md using the exact
+format required by CLAUDE.md rule 5.
+
+REPORT BACK:
+- Files changed
+- Exact new prompt template wording used for ARCHITECTURE.md synthesis
+- New validation function added and its exact behavior
+- Tests added and their results
+- Confirmation (with a real or mocked sample) that the 5-section
+  structure with correct diagram types is now produced correctly
+- Any deviations from this specification and why
+
+If this task seems to require touching files beyond the approved
+target list, STOP and flag it before proceeding.
+
+---
+
+## Fix LLM Fallback Chain Bug & Clean Up Deterministic Fallback Output
+
+### Goal
+
+Investigate a reported bug where the OpenRouter fallback in the synthesis
+LLM chain allegedly produces only an apology sentence instead of real
+content, fix the actual root cause if one exists, and rewrite the
+deterministic fallback templates (README/ARCHITECTURE/ONBOARDING) so a
+fallback never surfaces as visible meta-commentary in a shipped document —
+recording it in the audit log instead.
+
+### User Prompt
+
+TASK 22B — Fix LLM Fallback Chain Bug & Clean Up Deterministic Fallback Output
+
+Suggested branch: fix/synthesis-fallback-chain
+Firstly checkout to the suggested branch. and branch it over `fix/architecture-diagram-types`
+Read CLAUDE.md Sections 1, 2, 3, 4, and 5 in full. Read PRD.md
+Sections 4.6 and 4.7 (LLM provider chain, template-based fallback
+requirement). Read CLAUDE.md Section 1's table row on LLM Providers
+carefully — the synthesis-stage model chain is Groq (primary) →
+OpenRouter (secondary, model: openai/gpt-oss-20b:free) → Gemini
+(final fallback). Do NOT deviate from this chain order or these model
+assignments.
+
+BUG REPORT (confirmed via real pipeline run on a live repository):
+When Groq fails during the synthesis stage and the pipeline falls
+over to OpenRouter, the resulting document that should have been
+generated by OpenRouter instead contains ONLY this literal sentence
+as its entire content:
+
+"This document was generated by a deterministic fallback because the
+AI-generated onboarding guide could not be produced."
+
+This is wrong in two independent ways that must both be fixed:
+
+PART 1 — ROOT CAUSE INVESTIGATION (the fallback chain itself is
+likely broken, not just its output formatting):
+Investigate packages/core/src/llm/provider.ts's callWithFallback
+implementation and packages/core/src/documentation/synthesizer.ts's
+per-document generation calls. Determine definitively why a
+successful (or plausibly successful) OpenRouter call is resulting in
+the deterministic template path being used instead of OpenRouter's
+actual output. Specifically check for:
+- Whether callWithFallback is actually being invoked with OpenRouter
+  as a real second attempt, or whether some earlier catch block is
+  swallowing the OpenRouter attempt and jumping straight to the
+  template fallback without truly trying OpenRouter.
+- Whether OpenRouter's response is succeeding at the network level
+  but then failing Zod schema validation (per CLAUDE.md rule "every
+  LLM call site must have a Zod-validated exit path") due to an
+  overly strict or mismatched schema for the synthesis output shape,
+  causing a false-negative failure that then triggers the template
+  path even though a usable response was actually received.
+- Whether the rate limiter (packages/core/src/llm/rate-limiter.ts) is
+  incorrectly blocking or timing out the OpenRouter attempt before it
+  can complete.
+- Whether the correct model name (openai/gpt-oss-20b:free) is
+  actually being passed for the OpenRouter synthesis call, or whether
+  a wrong/unavailable model identifier is causing OpenRouter itself
+  to reject the request.
+
+Fix whatever the actual root cause is. Do not paper over the symptom
+without identifying and fixing the underlying defect — if the defect
+turns out to be schema validation being too strict, loosen/correct
+the schema precisely (do not remove validation entirely, per CLAUDE.md
+rule 5). If it turns out to be a control-flow bug in callWithFallback
+(e.g. an early return, an incorrectly caught exception type, or a
+missing await), fix the control flow directly.
+
+PART 2 — CLEAN UP THE GENUINE FALLBACK PATH (for the real edge case
+where ALL providers, including Gemini, genuinely fail):
+The current behavior of literally writing an apologetic sentence as
+the entire document body does not match PRD.md Section 4.6's actual
+requirement: "Template-based fallback generation if any LLM call
+fails validation." A template-based fallback means a real, useful,
+DETERMINISTICALLY-CONSTRUCTED document built from data the pipeline
+already has — not a single sentence of prose apologizing for an LLM
+failure.
+
+Rewrite the deterministic fallback template(s) in
+packages/core/src/documentation/synthesizer.ts (one fallback template
+per document type: README, ARCHITECTURE, ONBOARDING) so that each one
+produces genuinely useful, clean content derived entirely from
+already-available deterministic data — no LLM call needed for this
+path at all:
+- README fallback: repository name, detected frameworks, monorepo/
+  package-manager info, the directory tree (via the existing
+  directory-tree.ts renderer), and a plain list of the top-scored
+  files with their one-line purpose IF a FileSummary already exists
+  in cache for that file (do not fabricate a purpose if no summary
+  exists — simply list the file path in that case).
+- ARCHITECTURE fallback: the directory tree, the detected frameworks,
+  and — if symbol/import-graph data is available — a simple `graph
+  TD` Mermaid diagram built directly from the deterministic import
+  graph (packages/core/src/analysis/import-graph.ts's output) showing
+  actual file-to-file import relationships for the top N most-connected
+  files, clearly labeled as an approximation per the existing Mermaid
+  disclaimer convention. This still counts as "deterministic" since
+  it is built from regex-derived import data, not an LLM call.
+- ONBOARDING fallback: entry points (from the entry-point detection
+  data already computed during scoring), setup instructions inferred
+  deterministically from detected package manager and framework
+  (e.g. "npm install", "npm run dev" if a dev script exists in
+  package.json — read the real package.json script names rather than
+  guessing), and a plain list of the highest-priority files to read
+  first (by score, from already-computed PriorityScore data).
+
+CRITICAL — REMOVE THE APOLOGY SENTENCE FROM THE DOCUMENT BODY
+ENTIRELY. The fact that a fallback occurred must NEVER appear as
+visible text inside README.md, ARCHITECTURE.md, or ONBOARDING.md
+going forward, whether the fallback was triggered correctly (Part 2's
+genuine last-resort case) or incorrectly (Part 1's bug). Instead:
+- Add a new AuditEntry (already defined in packages/core/src/types.ts)
+  at the point where a fallback template is used instead of an LLM
+  response, with stage: 'synthesis', action: 'fallback_used', and a
+  clear detail string identifying which document type triggered it
+  and why (e.g. which providers were attempted and how each failed).
+- This AuditEntry flows into the existing auditLog array already
+  returned in PipelineResult and already surfaced via the API's
+  /runs/:runId/results endpoint and the CLI's output — so the
+  information remains fully transparent and traceable to anyone
+  inspecting the run, without polluting the shipped Markdown content
+  itself.
+- If a CLI-specific summary output already exists (e.g. an end-of-run
+  console message), it is acceptable to also print a concise notice
+  there (e.g. "Note: ARCHITECTURE.md was generated via deterministic
+  fallback — see audit log for details") since that is transient
+  terminal output, not part of the shipped document files — but this
+  is optional, not required for this task.
+
+Update packages/core/src/types.ts's AuditEntry usage documentation
+comment if needed to reflect this new 'fallback_used' action value,
+following the existing labeling convention from ARCHITECTURE.md
+Section 6 (comment noting source module).
+
+TESTING (write these before finalizing, per CLAUDE.md Section 2 rule
+6):
+In packages/core/src/__tests__/provider.test.ts, add tests that:
+- Mock Groq failing and OpenRouter succeeding, and assert
+  callWithFallback returns OpenRouter's actual response content (not
+  a fallback marker), proving the root-cause bug from Part 1 is fixed.
+- Mock Groq and OpenRouter both failing and Gemini succeeding
+  (documentation pipeline context only, not the Deep Dive agent chain,
+  per CLAUDE.md's explicit no-Gemini-in-agent-chain rule), and assert
+  Gemini's response is used.
+- Mock all three failing, and assert callWithFallback surfaces a clear
+  error rather than silently returning something that looks like a
+  success.
+
+In packages/core/src/__tests__/synthesizer.test.ts, add tests that:
+- Force all providers to fail for the ONBOARDING document specifically,
+  and assert the returned onboarding content matches the new
+  deterministic template's real structure (entry points, setup
+  commands, priority file list) — NOT the old apology sentence.
+- Assert that when a fallback template is used, an AuditEntry with
+  action 'fallback_used' is present in the returned audit log, and
+  that the document body itself contains no reference to "fallback",
+  "could not be produced", "deterministic", or similar meta-commentary
+  anywhere in the shipped Markdown string (assert via a string-search
+  test on the final content).
+- Assert that when providers succeed normally, no 'fallback_used'
+  AuditEntry is added and the document is exactly the LLM's validated
+  output.
+
+Run the auto-lint skill (per CLAUDE.md rule 6) scoped to
+packages/core, and resolve any remaining errors manually.
+
+Append this complete prompt verbatim to prompts.md using the exact
+format required by CLAUDE.md rule 5.
+
+REPORT BACK:
+- The confirmed root cause of the fallback-chain bug (exact function/
+  line-level explanation) and the exact fix applied
+- The new deterministic fallback template content for all three
+  document types, with a short sample of each
+- Confirmation that no apology/meta-commentary text can appear in any
+  shipped document under any circumstance, including the genuine
+  all-providers-failed case
+- Tests added and their results
+- Any deviations from this specification and why
+
+If this task seems to require touching files beyond the approved
+target list, STOP and flag it before proceeding.
+
+---

@@ -1,4 +1,4 @@
-import type { ProviderRateLimits } from './types';
+import type { ArchitectureRequiredSection, ProviderRateLimits } from './types';
 
 // From analysis/discovery.ts
 export const DISCOVERY_MAX_FILES = 1500;
@@ -59,6 +59,15 @@ export const FRAMEWORK_EXCLUDED_SCAN_DIRS = new Set([
   'cypress',
   'e2e',
 ]);
+
+// From documentation/synthesizer.ts's deterministic ARCHITECTURE fallback —
+// how many of the most-imported files get drawn into the Component Relation
+// Graph when the real diagram is built from analysis/import-graph.ts's edges
+// instead of an LLM call.
+export const DOC_SYNTHESIS_FALLBACK_TOP_CONNECTED_FILES = 15;
+// Caps total edges rendered in that fallback diagram — a repo with a lot of
+// fan-in can otherwise produce an unreadable (and slow-to-render) diagram.
+export const DOC_SYNTHESIS_FALLBACK_MAX_GRAPH_EDGES = 40;
 
 // From analysis/import-graph.ts
 export const IMPORT_GRAPH_IMPORT_FROM_REGEX = /import\s+.*?\s+from\s+['"](.+?)['"]/g;
@@ -151,8 +160,30 @@ export const MERMAID_FENCE_PATTERN = /```mermaid\n([\s\S]*?)```/g;
 // Catches the most common real breakage: an unquoted node label containing
 // ":", "(", ")", or "|", which mermaid parses as syntax, not literal text.
 export const MERMAID_UNQUOTED_LABEL_WITH_SPECIAL_CHARS_PATTERN = /\[[^\]"]*[():|][^\]"]*\]/;
+// ARCHITECTURE.md's required section structure, in order — single source of
+// truth shared by documentation/synthesizer.ts's prompt/fallback-template
+// builders and documentation/mermaid-validator.ts's structural validator, so
+// the prompt's promises and the validator's checks can never drift apart.
+export const ARCHITECTURE_REQUIRED_SECTIONS: readonly ArchitectureRequiredSection[] = [
+  { heading: 'High-Level System Diagram', diagramType: 'graph' },
+  { heading: 'Components', diagramType: null },
+  { heading: 'Component Relation Graph', diagramType: 'graph' },
+  { heading: 'System Sequence Diagram', diagramType: 'sequenceDiagram' },
+  { heading: 'System Flowchart', diagramType: 'flowchart' },
+];
+// Headings from the pre-fix prompt structure that must never reappear: the
+// old design split what is now one "System Sequence Diagram" section into
+// two conditionally-generated, near-duplicate sections. Their presence means
+// the LLM reverted to the buggy duplicate-section shape.
+export const ARCHITECTURE_LEGACY_HEADINGS = ['Frontend Component Relation Graph', 'Frontend Data Flow Chart', 'Backend Flow Chart'];
 
 // From documentation/summarizer.ts
+// The `purpose` value fallbackSummary() stamps on a file whose summarization
+// genuinely failed — shared with documentation/synthesizer.ts's deterministic
+// fallback templates so they can tell "no real summary exists for this file"
+// apart from "this file's real purpose happens to be short", instead of
+// fabricating a purpose for it.
+export const SUMMARIZER_FALLBACK_PURPOSE = 'Could not summarize';
 export const SUMMARIZER_PROMPT_VERSION = 'v1';
 export const SUMMARIZER_MAX_BATCH_FILES = 5;
 export const SUMMARIZER_MAX_BATCH_CHARS = 6000;
@@ -173,10 +204,13 @@ export const DOC_SYNTHESIS_MERMAID_REPAIR_TEMPERATURE = 0.1;
 // Bounds worst-case extra LLM calls from a pathologically broken doc — the
 // prompt only ever asks for up to 4 diagrams, so this is a generous ceiling.
 export const DOC_SYNTHESIS_MAX_MERMAID_REPAIR_ATTEMPTS = 6;
+// Structural repair (missing/duplicate/wrong-type headings) rewrites the
+// WHOLE document, not just one diagram, so it needs the same token budget as
+// the original synthesis call, at a low temperature since this is a
+// corrective rewrite, not creative generation.
+export const DOC_SYNTHESIS_STRUCTURE_REPAIR_TEMPERATURE = 0.2;
 export const MERMAID_DISCLAIMER =
   '> Note: This architecture diagram is an AI-generated approximation based on static analysis, not a guaranteed reverse-engineered UML diagram.';
-export const DOC_SYNTHESIS_FRONTEND_FRAMEWORKS = new Set(['react', 'nextjs', 'vite']);
-export const DOC_SYNTHESIS_BACKEND_FRAMEWORKS = new Set(['express', 'nestjs', 'nextjs']);
 export const DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION =
   "When you reference a specific function, class, or exported symbol by name, wrap it in backticks (e.g. `functionName`) so it can be cross-referenced — never invent file paths or line numbers yourself.";
 // Shared by every prompt that asks for a mermaid diagram — calls out the

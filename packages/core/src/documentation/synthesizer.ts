@@ -1,35 +1,50 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import {
-  DOC_SYNTHESIS_BACKEND_FRAMEWORKS,
+  ARCHITECTURE_LEGACY_HEADINGS,
+  ARCHITECTURE_REQUIRED_SECTIONS,
   DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION,
   DOC_SYNTHESIS_CALL_TIMEOUT_MS,
-  DOC_SYNTHESIS_FRONTEND_FRAMEWORKS,
+  DOC_SYNTHESIS_FALLBACK_MAX_GRAPH_EDGES,
+  DOC_SYNTHESIS_FALLBACK_TOP_CONNECTED_FILES,
   DOC_SYNTHESIS_MAX_ATTEMPTS,
   DOC_SYNTHESIS_MAX_MERMAID_REPAIR_ATTEMPTS,
   DOC_SYNTHESIS_MAX_TOKENS,
   DOC_SYNTHESIS_MERMAID_REPAIR_MAX_TOKENS,
   DOC_SYNTHESIS_MERMAID_REPAIR_TEMPERATURE,
   DOC_SYNTHESIS_MERMAID_SYNTAX_RULES,
+  DOC_SYNTHESIS_STRUCTURE_REPAIR_TEMPERATURE,
   DOC_SYNTHESIS_SUMMARY_CHAR_BUDGET,
   DOC_SYNTHESIS_TEMPERATURE,
   MERMAID_DISCLAIMER,
+  SUMMARIZER_FALLBACK_PURPOSE,
 } from '../constants';
 import { callWithFallback } from '../llm/provider';
 import type { TokenBucketRateLimiter } from '../llm/rate-limiter';
-import type { AuditEntry, DocType, FileNode, FileSummary, LLMProvider, RepoMeta, SynthesisResult } from '../types';
+import { SynthesisDocumentSchema } from '../schemas';
+import type {
+  ArchitectureDiagramIssue,
+  AuditEntry,
+  DocType,
+  FileNode,
+  FileSummary,
+  ImportGraph,
+  LLMProvider,
+  RepoMeta,
+  SynthesisResult,
+} from '../types';
 
 import { mapCitations } from './citation-mapper';
 import { buildDirectoryTree } from './directory-tree';
-import { extractMermaidBlocks, validateMermaidSyntax } from './mermaid-validator';
+import {
+  extractMermaidBlocks,
+  repairArchitectureDiagramTypesMechanically,
+  validateArchitectureDiagramTypes,
+  validateMermaidSyntax,
+} from './mermaid-validator';
 
 export { MERMAID_DISCLAIMER } from '../constants';
-
-function hasFrontendFramework(frameworks: string[]): boolean {
-  return frameworks.some((framework) => DOC_SYNTHESIS_FRONTEND_FRAMEWORKS.has(framework.toLowerCase()));
-}
-
-function hasBackendFramework(frameworks: string[]): boolean {
-  return frameworks.some((framework) => DOC_SYNTHESIS_BACKEND_FRAMEWORKS.has(framework.toLowerCase()));
-}
 
 function truncateSummariesToBudget(summaries: FileSummary[], budgetChars: number): FileSummary[] {
   const truncated: FileSummary[] = [];
@@ -96,13 +111,32 @@ Do NOT include a "## Project Structure" or "## Directory Structure" section — 
 ${DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION} Output ONLY the Markdown document, no commentary before or after it.`;
 }
 
+// Single source of truth for the "produce these 5 sections, in this exact
+// order, with these exact diagram types" instructions — used by both the
+// initial synthesis prompt and the structural-repair re-prompt, so the two
+// can never describe a different contract than documentation/
+// mermaid-validator.ts's validateArchitectureDiagramTypes() actually checks.
+function buildArchitectureSectionRequirementsBlock(): string {
+  const [highLevel, components, componentRelation, sequence, flowchart] = ARCHITECTURE_REQUIRED_SECTIONS;
+
+  return `Produce EXACTLY these 5 sections, in this exact order, with no additional headings and no omissions:
+
+1. "## ${highLevel!.heading}" — MUST contain exactly one \`\`\`mermaid code block opening with "${highLevel!.diagramType}" (e.g. "graph TD") — NEVER "flowchart" and NEVER "sequenceDiagram". Show the major system components (e.g. CLI/Web, API, Core engine, Database, external services) and their high-level relationships only — this is a component overview, not a step-by-step process.
+
+2. "## ${components!.heading}" — prose only, no diagram. Describe the major components and how they relate. ${DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION}
+
+3. "## ${componentRelation!.heading}" — MUST contain exactly one \`\`\`mermaid code block opening with "${componentRelation!.diagramType}" — NEVER "flowchart" and NEVER "sequenceDiagram". Show how the repository's internal components relate to each other (parent/child, composition, or data-passing relationships), grounded only in components evident from the summaries. If the repository has a clear frontend/backend split, this may focus on the frontend's internal component relationships; the diagram type requirement applies regardless of repo shape.
+
+4. "## ${sequence!.heading}" — MUST contain exactly one \`\`\`mermaid code block opening with "${sequence!.diagramType}". Represent the full request/operation lifecycle end-to-end as ONE coherent sequence (e.g. user → entrypoint → core logic → data layer → back up the chain) — do NOT split this into separate frontend and backend diagrams; there must be only one sequence diagram in the whole document.
+
+5. "## ${flowchart!.heading}" — this MUST be the final section of the document. MUST contain exactly one \`\`\`mermaid code block opening with "${flowchart!.diagramType}" (e.g. "flowchart TD") — NEVER "graph" and NEVER "sequenceDiagram". Represent the complete system's operational flow end-to-end (e.g. ingestion/startup → routing → business logic → data persistence → response) using genuine flowchart decision/process shapes — this is a process flow, not a component graph. Nothing else may appear under this heading except one short introductory sentence and the single flowchart code block — no sub-sections, no additional diagrams.
+
+Do NOT invent any headings beyond these 5. Do NOT reuse a diagram type across two different sections in a way that duplicates another section's content. Do NOT produce the old, retired headings "${ARCHITECTURE_LEGACY_HEADINGS.join('", "')}" — they no longer exist in this structure.`;
+}
+
 export function buildArchitecturePrompt(summaries: FileSummary[], repoMeta: RepoMeta, directoryTree: string): string {
   const summariesBlock = formatSummariesBlock(summaries);
   const frameworksLine = repoMeta.frameworks.length > 0 ? repoMeta.frameworks.join(', ') : 'none detected';
-  const frontend = hasFrontendFramework(repoMeta.frameworks);
-  const backend = hasBackendFramework(repoMeta.frameworks);
-  const frontendNotApplicable = '_Not applicable — no frontend framework detected in this repository._ (no diagram)';
-  const backendNotApplicable = '_Not applicable — no backend framework detected in this repository._ (no diagram)';
 
   return `You are generating an ARCHITECTURE.md for a code repository named "${repoMeta.name}".
 
@@ -126,24 +160,31 @@ ${directoryTree}
 
 ${DOC_SYNTHESIS_MERMAID_SYNTAX_RULES}
 
-Produce ALL of the following sections, in this exact order:
+Produce ALL of the following, in this exact order:
 
 1. The very first line of your output MUST be exactly this disclaimer, verbatim, with no modification:
 ${MERMAID_DISCLAIMER}
 
 2. "## Directory Structure" — reproduce the directory tree above VERBATIM inside a plain \`\`\` code fence (not mermaid). Do not shorten, reformat, or invent paths.
 
-3. "## High-Level System Diagram" — a \`\`\`mermaid flowchart or graph summarizing the major modules/components implied by the summaries above and how they connect.
-
-4. "## Components" — prose describing the major components and how they relate. ${DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION}
-
-5. "## Frontend Component Relation Graph" — ${frontend ? 'a ```mermaid diagram showing how the major frontend components/pages relate to each other (parent/child, composition, or data-passing relationships), grounded only in components evident from the summaries.' : frontendNotApplicable}
-
-6. "## Frontend Data Flow Chart" — ${frontend ? 'a ```mermaid diagram showing how data flows through the frontend (e.g. user action → state/store → API call → render), grounded only in what the summaries show.' : frontendNotApplicable}
-
-7. "## Backend Flow Chart" — ${backend ? 'a ```mermaid diagram showing the backend request/processing flow (e.g. route → middleware → handler → data layer → response), grounded only in what the summaries show.' : backendNotApplicable}
+${buildArchitectureSectionRequirementsBlock()}
 
 Output ONLY the Markdown document, no commentary before or after it.`;
+}
+
+function buildArchitectureStructureRepairPrompt(markdown: string, issues: ArchitectureDiagramIssue[]): string {
+  return `The following ARCHITECTURE.md content violates required structural rules and must be corrected:
+
+<broken_architecture_doc>
+${markdown}
+</broken_architecture_doc>
+
+Structural violations found:
+${issues.map((issue) => `- "## ${issue.heading}": ${issue.detail}`).join('\n')}
+
+${buildArchitectureSectionRequirementsBlock()}
+
+Return the COMPLETE corrected ARCHITECTURE.md document — every section (including the disclaimer, "## Directory Structure", and any sections that were already correct), not just the fixed ones. No commentary before or after it.`;
 }
 
 export function buildOnboardingPrompt(summaries: FileSummary[], repoMeta: RepoMeta): string {
@@ -176,16 +217,81 @@ Write a clear ONBOARDING.md that gets a brand-new developer productive as fast a
 ${DOC_SYNTHESIS_BACKTICK_CITATION_INSTRUCTION} Output ONLY the Markdown document, no commentary before or after it.`;
 }
 
+// A file only gets its `purpose` shown when a real summary exists for it
+// (i.e. it wasn't stamped by documentation/summarizer.ts's fallbackSummary())
+// — fabricating a one-line purpose for a file that was never actually
+// summarized would be worse than just listing its path.
+function formatFileListEntry(summary: FileSummary): string {
+  return summary.purpose === SUMMARIZER_FALLBACK_PURPOSE
+    ? `- \`${summary.path}\``
+    : `- \`${summary.path}\`: ${summary.purpose}`;
+}
+
+// Reads the real "scripts" section of the repo's root package.json, if any —
+// setup instructions in the deterministic ONBOARDING fallback must reflect
+// what the project's own scripts actually are, never a guessed convention
+// (e.g. assuming "dev" or "start" exists just because most projects have one).
+function readPackageJsonScripts(rootPath: string): Record<string, string> {
+  const packageJsonPath = join(rootPath, 'package.json');
+
+  if (!existsSync(packageJsonPath)) {
+    return {};
+  }
+
+  try {
+    const parsed = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { scripts?: unknown };
+
+    return parsed.scripts !== null && typeof parsed.scripts === 'object' ? (parsed.scripts as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+// Builds the ARCHITECTURE fallback's "Component Relation Graph" from
+// analysis/import-graph.ts's REAL resolved edges — grounded in actual
+// file-to-file import relationships for the most-imported files, not a
+// fabricated chain, per TASK 22B's requirement that even the deterministic
+// fallback never invent structure it doesn't have evidence for.
+function buildImportRelationGraph(importGraph: ImportGraph): string {
+  const mostConnected = [...importGraph.inDegree.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, DOC_SYNTHESIS_FALLBACK_TOP_CONNECTED_FILES)
+    .map(([path]) => path);
+
+  if (mostConnected.length === 0) {
+    return '  None["no import relationships detected"]';
+  }
+
+  const topSet = new Set(mostConnected);
+  const relevantEdges = importGraph.edges
+    .filter((edge) => topSet.has(edge.to) || topSet.has(edge.from))
+    .slice(0, DOC_SYNTHESIS_FALLBACK_MAX_GRAPH_EDGES);
+
+  if (relevantEdges.length === 0) {
+    return mostConnected.map((path, index) => `  N${index}["${path}"]`).join('\n');
+  }
+
+  const idByPath = new Map<string, string>();
+
+  function idFor(path: string): string {
+    let id = idByPath.get(path);
+
+    if (id === undefined) {
+      id = `N${idByPath.size}`;
+      idByPath.set(path, id);
+    }
+
+    return id;
+  }
+
+  return relevantEdges.map((edge) => `  ${idFor(edge.from)}["${edge.from}"] --> ${idFor(edge.to)}["${edge.to}"]`).join('\n');
+}
+
 function generateReadmeFallback(summaries: FileSummary[], repoMeta: RepoMeta): string {
   const frameworksLine = repoMeta.frameworks.length > 0 ? repoMeta.frameworks.join(', ') : 'none detected';
-  const fileList = summaries
-    .slice(0, 20)
-    .map((summary) => `- \`${summary.path}\`: ${summary.purpose}`)
-    .join('\n');
+  const fileList = summaries.slice(0, 20).map(formatFileListEntry).join('\n');
 
   return `# ${repoMeta.name}
-
-_This document was generated by a deterministic fallback because the AI-generated README could not be produced._
 
 ## Overview
 
@@ -195,9 +301,7 @@ _This document was generated by a deterministic fallback because the AI-generate
 
 ## Key Features
 
-_Could not be summarized without the AI-generated document — below are the top analyzed files as a proxy:_
-
-${fileList || '_No summarized files available._'}
+${fileList || '_No analyzed files available._'}
 
 ## Tech Stack
 
@@ -210,21 +314,22 @@ See ONBOARDING.md for full setup instructions. Quick start: \`${repoMeta.package
 `;
 }
 
-function generateArchitectureFallback(summaries: FileSummary[], repoMeta: RepoMeta, directoryTree: string): string {
-  const topSummaries = summaries.slice(0, 15);
-  const nodes = topSummaries.map((summary, index) => `  Repo --> F${index}["${summary.path}"]`).join('\n');
-  const componentList = topSummaries.map((summary) => `- \`${summary.path}\`: ${summary.purpose}`).join('\n');
-  const frontend = hasFrontendFramework(repoMeta.frameworks);
-  const backend = hasBackendFramework(repoMeta.frameworks);
-  const notGenerated = '_Not applicable — this diagram requires the AI-generated document, which could not be produced (fallback mode)._';
-  const frontendNotApplicable = '_Not applicable — no frontend framework detected in this repository._';
-  const backendNotApplicable = '_Not applicable — no backend framework detected in this repository._';
+function generateArchitectureFallback(
+  summaries: FileSummary[],
+  repoMeta: RepoMeta,
+  directoryTree: string,
+  importGraph: ImportGraph,
+): string {
+  const topSummaries = summaries.slice(0, DOC_SYNTHESIS_FALLBACK_TOP_CONNECTED_FILES);
+  const componentNodes = topSummaries.map((summary, index) => `  Repo --> F${index}["${summary.path}"]`).join('\n');
+  const componentList = topSummaries.map(formatFileListEntry).join('\n');
+  const relationGraph = buildImportRelationGraph(importGraph);
+  const entryPoints = repoMeta.subProjects.flatMap((subProject) => subProject.entryPoints);
+  const entryPointLabel = entryPoints[0] ?? 'the application entry point';
 
   return `${MERMAID_DISCLAIMER}
 
 # ${repoMeta.name} — Architecture
-
-_This document was generated by a deterministic fallback because the AI-generated architecture doc could not be produced._
 
 ## Directory Structure
 
@@ -235,40 +340,52 @@ ${directoryTree}
 ## High-Level System Diagram
 
 \`\`\`mermaid
-flowchart TD
+graph TD
   Repo["${repoMeta.name}"]
-${nodes || '  Repo --> None["no summarized files available"]'}
+${componentNodes || '  Repo --> None["no analyzed files available"]'}
 \`\`\`
 
 ## Components
 
-${componentList || '_No summarized files available._'}
+${componentList || '_No analyzed files available._'}
 
-## Frontend Component Relation Graph
+## Component Relation Graph
 
-${frontend ? notGenerated : frontendNotApplicable}
+\`\`\`mermaid
+graph TD
+${relationGraph}
+\`\`\`
 
-## Frontend Data Flow Chart
+## System Sequence Diagram
 
-${frontend ? notGenerated : frontendNotApplicable}
+\`\`\`mermaid
+sequenceDiagram
+  User->>Entry: invoke ${entryPointLabel}
+  Entry->>Core: process
+  Core-->>Entry: result
+  Entry-->>User: response
+\`\`\`
 
-## Backend Flow Chart
+## System Flowchart
 
-${backend ? notGenerated : backendNotApplicable}
+\`\`\`mermaid
+flowchart TD
+  Start(["Start"]) --> Entry["${entryPointLabel}"]
+  Entry --> Process["Core processing"]
+  Process --> End(["Response"])
+\`\`\`
 `;
 }
 
 function generateOnboardingFallback(summaries: FileSummary[], repoMeta: RepoMeta): string {
   const entryPoints = repoMeta.subProjects.flatMap((subProject) => subProject.entryPoints);
   const entryPointsLine = entryPoints.length > 0 ? entryPoints.map((entryPoint) => `\`${entryPoint}\``).join(', ') : 'none detected';
-  const readingList = summaries
-    .slice(0, 10)
-    .map((summary) => `- \`${summary.path}\`: ${summary.purpose}`)
-    .join('\n');
+  const readingList = summaries.slice(0, 10).map(formatFileListEntry).join('\n');
+  const scripts = readPackageJsonScripts(repoMeta.rootPath);
+  const runCommand = scripts.dev !== undefined ? `${repoMeta.packageManager} run dev` : undefined;
+  const testCommand = scripts.test !== undefined ? `${repoMeta.packageManager} run test` : undefined;
 
   return `# Onboarding — ${repoMeta.name}
-
-_This document was generated by a deterministic fallback because the AI-generated onboarding guide could not be produced._
 
 ## Prerequisites
 
@@ -282,15 +399,15 @@ _This document was generated by a deterministic fallback because the AI-generate
 
 ## Running the Project
 
-Detected entry points: ${entryPointsLine}
+${runCommand !== undefined ? `Start the development server: \`${runCommand}\`\n\n` : ''}Detected entry points: ${entryPointsLine}
 
 ## Running Tests
 
-_Could not be automatically detected without the AI-generated document (fallback mode) — check \`package.json\`'s "scripts" for a test command._
+${testCommand !== undefined ? `Run the test suite: \`${testCommand}\`` : 'No test script was detected in `package.json`.'}
 
 ## Where to Start Reading
 
-${readingList || '_No summarized files available._'}
+${readingList || '_No analyzed files available._'}
 `;
 }
 
@@ -299,13 +416,14 @@ export function generateTemplateFallback(
   summaries: FileSummary[],
   repoMeta: RepoMeta,
   directoryTree: string,
+  importGraph: ImportGraph,
 ): string {
   if (docType === 'readme') {
     return generateReadmeFallback(summaries, repoMeta);
   }
 
   if (docType === 'architecture') {
-    return generateArchitectureFallback(summaries, repoMeta, directoryTree);
+    return generateArchitectureFallback(summaries, repoMeta, directoryTree, importGraph);
   }
 
   return generateOnboardingFallback(summaries, repoMeta);
@@ -455,10 +573,110 @@ async function repairInvalidMermaidBlocks(
   return result;
 }
 
+// Structural safety net, layered after repairInvalidMermaidBlocks: a
+// syntactically-valid Mermaid document can still have the wrong diagram type
+// under a heading, a missing "System Flowchart", or a reverted duplicate
+// legacy heading. Fixes cheapest-first — deterministic keyword swap, then one
+// LLM re-prompt, then the deterministic template — so a structurally wrong
+// document is never shipped silently as if it were correct.
+async function enforceArchitectureStructure(
+  markdown: string,
+  summaries: FileSummary[],
+  repoMeta: RepoMeta,
+  directoryTree: string,
+  importGraph: ImportGraph,
+  symbolIndex: Map<string, Array<{ path: string; line: number }>>,
+  providers: LLMProvider[],
+  rateLimiters: Map<string, TokenBucketRateLimiter>,
+  auditLog: AuditEntry[],
+  signal?: AbortSignal,
+): Promise<string> {
+  const initialValidation = validateArchitectureDiagramTypes(markdown);
+
+  if (initialValidation.valid) {
+    return markdown;
+  }
+
+  const mechanicallyFixed = repairArchitectureDiagramTypesMechanically(markdown, initialValidation.issues);
+  const afterMechanicalFix = validateArchitectureDiagramTypes(mechanicallyFixed);
+
+  if (afterMechanicalFix.valid) {
+    auditLog.push({
+      timestamp: Date.now(),
+      stage: 'synthesis',
+      action: 'architecture_structure_repaired',
+      detail: `Mechanically corrected diagram type keyword(s): ${initialValidation.issues.map((issue) => `"${issue.heading}" (${issue.problem})`).join('; ')}`,
+    });
+
+    return mechanicallyFixed;
+  }
+
+  try {
+    const rawRepair = await callWithRetryAndTimeout(
+      providers,
+      buildArchitectureStructureRepairPrompt(mechanicallyFixed, afterMechanicalFix.issues),
+      { maxTokens: DOC_SYNTHESIS_MAX_TOKENS, temperature: DOC_SYNTHESIS_STRUCTURE_REPAIR_TEMPERATURE },
+      rateLimiters,
+      signal,
+    );
+    let repaired = mapCitations(rawRepair, symbolIndex);
+
+    repaired = await repairInvalidMermaidBlocks(repaired, providers, rateLimiters, auditLog, signal);
+
+    const revalidation = validateArchitectureDiagramTypes(repaired);
+
+    if (revalidation.valid) {
+      auditLog.push({
+        timestamp: Date.now(),
+        stage: 'synthesis',
+        action: 'architecture_structure_repaired',
+        detail: `Repaired via LLM re-prompt: ${afterMechanicalFix.issues.map((issue) => issue.detail).join('; ')}`,
+      });
+
+      return repaired;
+    }
+
+    auditLog.push({
+      timestamp: Date.now(),
+      stage: 'synthesis',
+      action: 'architecture_structure_fallback',
+      detail: `Structural repair re-prompt still invalid, falling back to deterministic template: ${revalidation.issues.map((issue) => issue.detail).join('; ')}`,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+
+    auditLog.push({
+      timestamp: Date.now(),
+      stage: 'synthesis',
+      action: 'architecture_structure_fallback',
+      detail: `Structural repair LLM call failed, falling back to deterministic template: ${message}`,
+    });
+  }
+
+  return generateArchitectureFallback(summaries, repoMeta, directoryTree, importGraph);
+}
+
+// The Zod-validated exit path every LLM call site needs (CLAUDE.md §2 rule
+// 5): a rejection here is treated exactly like a rejected callWithFallback
+// promise, flowing into the same Promise.allSettled fallback branch below —
+// it only ever guards against blank/whitespace output slipping through (see
+// schemas.ts's SynthesisDocumentSchema comment for why it's deliberately
+// this loose).
+function validateSynthesisOutput(raw: string, docType: DocType): string {
+  const result = SynthesisDocumentSchema.safeParse(raw);
+
+  if (!result.success) {
+    throw new Error(`${docType} synthesis output failed validation: ${result.error.issues.map((issue) => issue.message).join('; ')}`);
+  }
+
+  return result.data;
+}
+
 export async function synthesize(
   summaries: FileSummary[],
   repoMeta: RepoMeta,
   files: FileNode[],
+  importGraph: ImportGraph,
   symbolIndex: Map<string, Array<{ path: string; line: number }>>,
   providers: LLMProvider[],
   rateLimiters: Map<string, TokenBucketRateLimiter>,
@@ -488,7 +706,9 @@ export async function synthesize(
         { maxTokens: DOC_SYNTHESIS_MAX_TOKENS, temperature: DOC_SYNTHESIS_TEMPERATURE },
         rateLimiters,
         signal,
-      ).finally(() => onProgress?.('synthesis', `${doc.type} generation finished`)),
+      )
+        .then((raw) => validateSynthesisOutput(raw, doc.type))
+        .finally(() => onProgress?.('synthesis', `${doc.type} generation finished`)),
     ),
   );
 
@@ -504,6 +724,18 @@ export async function synthesize(
 
       if (docType === 'architecture') {
         content = await repairInvalidMermaidBlocks(content, providers, rateLimiters, auditLog, signal);
+        content = await enforceArchitectureStructure(
+          content,
+          budgeted,
+          repoMeta,
+          directoryTree,
+          importGraph,
+          symbolIndex,
+          providers,
+          rateLimiters,
+          auditLog,
+          signal,
+        );
       }
 
       results[docType] = content;
@@ -515,15 +747,15 @@ export async function synthesize(
         detail: `${docType} generated via LLM`,
       });
     } else {
-      results[docType] = generateTemplateFallback(docType, budgeted, repoMeta, directoryTree);
+      results[docType] = generateTemplateFallback(docType, budgeted, repoMeta, directoryTree, importGraph);
 
       const reason = outcome.reason instanceof Error ? outcome.reason.message : String(outcome.reason);
 
       auditLog.push({
         timestamp: Date.now(),
         stage: 'synthesis',
-        action: 'template_fallback',
-        detail: `${docType} fell back to template: ${reason}`,
+        action: 'fallback_used',
+        detail: `${docType} fell back to the deterministic template: ${reason}`,
       });
     }
   }

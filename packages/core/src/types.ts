@@ -65,6 +65,13 @@ export interface SynthesisResult {
   onboarding: string;
 }
 
+// `action` is a free-form label, not a closed enum, but a few values carry
+// specific meaning callers rely on: documentation/synthesizer.ts pushes
+// stage: 'synthesis', action: 'fallback_used' at the exact point a
+// deterministic template replaces an LLM-generated document (whether because
+// every provider failed or the response failed its Zod-validated exit path)
+// — this is the ONLY place that fact is recorded; the shipped Markdown itself
+// must never mention it (see synthesizer.ts's generate*Fallback functions).
 export interface AuditEntry {
   timestamp: number;
   stage: string;
@@ -136,6 +143,12 @@ export interface PackageJsonShape {
 // From analysis/import-graph.ts
 export interface ImportGraph {
   inDegree: Map<string, number>;
+  // Every resolved importer -> imported edge, in discovery order — the raw
+  // material for documentation/synthesizer.ts's deterministic ARCHITECTURE
+  // fallback diagram (real file-to-file relationships, not a fabricated
+  // chain). `inDegree` alone can't reconstruct this: it only ever kept the
+  // aggregate count per target, never which files pointed at it.
+  edges: Array<{ from: string; to: string }>;
 }
 
 // From cache/sqlite-cache.ts
@@ -161,6 +174,36 @@ export interface MermaidBlock {
 export interface MermaidValidationResult {
   valid: boolean;
   errors: string[];
+}
+
+// ARCHITECTURE.md's fixed diagram-type contract per required heading — shared
+// by documentation/synthesizer.ts (to build the prompt) and
+// documentation/mermaid-validator.ts (to validate the LLM's output against
+// it), so the two can never drift apart.
+export type ArchitectureDiagramType = 'graph' | 'sequenceDiagram' | 'flowchart';
+
+export interface ArchitectureRequiredSection {
+  heading: string;
+  // null means the section is prose-only and must NOT contain a diagram.
+  diagramType: ArchitectureDiagramType | null;
+}
+
+export type ArchitectureDiagramIssueProblem =
+  | 'missing_heading'
+  | 'missing_diagram'
+  | 'wrong_diagram_type'
+  | 'duplicate_heading'
+  | 'legacy_heading_present';
+
+export interface ArchitectureDiagramIssue {
+  heading: string;
+  problem: ArchitectureDiagramIssueProblem;
+  detail: string;
+}
+
+export interface ArchitectureDiagramValidationResult {
+  valid: boolean;
+  issues: ArchitectureDiagramIssue[];
 }
 
 // From documentation/summarizer.ts

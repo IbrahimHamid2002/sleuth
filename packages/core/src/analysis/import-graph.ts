@@ -45,6 +45,7 @@ function resolveRelativeImport(
 
 export function buildImportGraph(files: FileNode[], contentCache: Map<string, string>): ImportGraph {
   const inDegree = new Map<string, number>();
+  const edges: Array<{ from: string; to: string }> = [];
   const knownFiles = new Set(files.filter((file) => file.type === 'file').map((file) => file.path));
 
   for (const file of files) {
@@ -67,9 +68,10 @@ export function buildImportGraph(files: FileNode[], contentCache: Map<string, st
 
       if (resolved !== undefined) {
         inDegree.set(resolved, (inDegree.get(resolved) ?? 0) + 1);
+        edges.push({ from: file.path, to: resolved });
       }
     }
   }
 
-  return { inDegree };
+  return { inDegree, edges };
 }

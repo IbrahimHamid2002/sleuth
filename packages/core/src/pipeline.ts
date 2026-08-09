@@ -199,6 +199,7 @@ async function executePipeline(
     summaries,
     repoMeta,
     files,
+    importGraph,
     symbolIndex,
     synthesizerProviders,
     synthesizerRateLimiters,
