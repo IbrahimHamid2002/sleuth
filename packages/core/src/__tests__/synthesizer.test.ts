@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { validateArchitectureDiagramTypes } from '../documentation/mermaid-validator';
@@ -10,7 +13,7 @@ import {
 } from '../documentation/synthesizer';
 import * as providerModule from '../llm/provider';
 import type { TokenBucketRateLimiter } from '../llm/rate-limiter';
-import type { AuditEntry, FileNode, FileSummary, RepoMeta } from '../types';
+import type { AuditEntry, FileNode, FileSummary, ImportGraph, RepoMeta } from '../types';
 
 vi.mock('../llm/provider', async () => {
   const actual = await vi.importActual<typeof providerModule>('../llm/provider');
@@ -50,6 +53,14 @@ const FILES: FileNode[] = [
   { path: 'src/foo.ts', type: 'file', size: 100 },
   { path: 'package.json', type: 'file', size: 50 },
 ];
+
+const IMPORT_GRAPH: ImportGraph = {
+  inDegree: new Map([['src/foo.ts', 2]]),
+  edges: [
+    { from: 'src/bar.ts', to: 'src/foo.ts' },
+    { from: 'src/baz.ts', to: 'src/foo.ts' },
+  ],
+};
 
 const SYMBOL_INDEX = new Map([['foo', [{ path: 'src/foo.ts', line: 3 }]]]);
 
@@ -171,7 +182,7 @@ describe('synthesize', () => {
       return `Generated ${docType} referencing \`foo\`.`;
     });
 
-    const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     expect(callWithFallback).toHaveBeenCalledTimes(3);
     expect(result.readme).toBe('Generated readme referencing `foo` [src/foo.ts:3].');
@@ -197,6 +208,7 @@ describe('synthesize', () => {
       SUMMARIES,
       REPO_META,
       FILES,
+      IMPORT_GRAPH,
       SYMBOL_INDEX,
       NO_PROVIDERS,
       NO_RATE_LIMITERS,
@@ -227,7 +239,7 @@ describe('synthesize', () => {
 
     const onProgress = vi.fn();
 
-    await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog, onProgress);
+    await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog, onProgress);
 
     expect(onProgress).toHaveBeenCalledTimes(3);
     expect(onProgress).toHaveBeenCalledWith('synthesis', 'readme generation finished');
@@ -250,17 +262,17 @@ describe('synthesize', () => {
       return `Generated ${docType} referencing \`foo\`.`;
     });
 
-    const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     // 1 call for readme + 1 for architecture + 3 retry attempts for onboarding.
     expect(callWithFallback).toHaveBeenCalledTimes(5);
 
     expect(result.readme).toBe('Generated readme referencing `foo` [src/foo.ts:3].');
-    expect(result.onboarding).toBe(generateTemplateFallback('onboarding', SUMMARIES, REPO_META, ''));
+    expect(result.onboarding).toBe(generateTemplateFallback('onboarding', SUMMARIES, REPO_META, '', IMPORT_GRAPH));
     expect(result.onboarding).toContain('pnpm install');
 
     const successEntries = auditLog.filter((entry) => entry.action === 'llm_success');
-    const fallbackEntries = auditLog.filter((entry) => entry.action === 'template_fallback');
+    const fallbackEntries = auditLog.filter((entry) => entry.action === 'fallback_used');
 
     expect(successEntries).toHaveLength(2);
     expect(fallbackEntries).toHaveLength(1);
@@ -278,7 +290,7 @@ describe('synthesize', () => {
       return `Generated ${docType}.`;
     });
 
-    const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     expect(result.architecture.startsWith(MERMAID_DISCLAIMER)).toBe(true);
   });
@@ -294,12 +306,12 @@ describe('synthesize', () => {
       return `Generated ${docType}.`;
     });
 
-    const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     expect(result.architecture.startsWith(MERMAID_DISCLAIMER)).toBe(true);
     expect(result.architecture).toContain('```mermaid');
 
-    const fallbackEntries = auditLog.filter((entry) => entry.action === 'template_fallback');
+    const fallbackEntries = auditLog.filter((entry) => entry.action === 'fallback_used');
 
     expect(fallbackEntries).toHaveLength(1);
     expect(fallbackEntries[0].detail).toContain('architecture');
@@ -325,7 +337,7 @@ describe('synthesize', () => {
       return `Generated ${docType}.`;
     });
 
-    await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+    await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     expect(architecturePrompt).toContain('src/');
     expect(architecturePrompt).toContain('foo.ts');
@@ -368,7 +380,7 @@ describe('synthesize', () => {
   });
 
   it('omits the License and Project Structure sections from the deterministic README fallback template', () => {
-    const fallback = generateTemplateFallback('readme', SUMMARIES, REPO_META, 'tree');
+    const fallback = generateTemplateFallback('readme', SUMMARIES, REPO_META, 'tree', IMPORT_GRAPH);
 
     expect(fallback).not.toContain('## License');
     expect(fallback).not.toContain('## Project Structure');
@@ -398,7 +410,7 @@ describe('synthesize', () => {
       return `Generated ${docType}.`;
     });
 
-    const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     expect(result.architecture).toContain('A["Label: fixed"] --> B["Node"]');
     expect(result.architecture).not.toContain('Label: broken (oops)');
@@ -441,7 +453,7 @@ describe('synthesize', () => {
       return `Generated ${docType}.`;
     });
 
-    const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     expect(result.architecture).not.toContain('Label: broken (oops)');
     expect(result.architecture).not.toContain('Diagram omitted');
@@ -469,7 +481,7 @@ describe('synthesize', () => {
       return `Generated ${docType}.`;
     });
 
-    const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     expect(validateArchitectureDiagramTypes(result.architecture).valid).toBe(true);
     expect(result.architecture).not.toContain('## Frontend Data Flow Chart');
@@ -489,10 +501,15 @@ describe('synthesize', () => {
       return `Generated ${docType}.`;
     });
 
-    const result = await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     expect(validateArchitectureDiagramTypes(result.architecture).valid).toBe(true);
-    expect(result.architecture).toContain('generated by a deterministic fallback');
+    // The deterministic template's real import-graph diagram, not fabricated
+    // prose — proves this is generateArchitectureFallback's output, without
+    // the document itself ever saying "fallback" (see the transparency test
+    // below: that fact belongs in the audit log only).
+    expect(result.architecture).toContain('src/bar.ts');
+    expect(result.architecture).not.toContain('generated by a deterministic fallback');
 
     const fallbackEntries = auditLog.filter((entry) => entry.action === 'architecture_structure_fallback');
 
@@ -510,7 +527,7 @@ describe('synthesize', () => {
       return `Generated ${docType}.`;
     });
 
-    await synthesize(SUMMARIES, REPO_META, FILES, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+    await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
 
     // Exactly 3 calls total (readme, architecture, onboarding) — no 4th
     // repair call, since the architecture doc's diagram was already valid.
@@ -518,5 +535,81 @@ describe('synthesize', () => {
     expect(auditLog.some((entry) => entry.action === 'mermaid_repaired' || entry.action === 'mermaid_stripped')).toBe(
       false,
     );
+  });
+
+  // TASK 22B: the deterministic ONBOARDING fallback must be a real, useful
+  // document built from data the pipeline already has — detected entry
+  // points, the repo's OWN package.json scripts (never guessed), and the
+  // priority-ordered file list — never the old one-sentence apology.
+  it('produces a real deterministic ONBOARDING document from detected entry points and the repo\'s real package.json scripts when every provider fails', async () => {
+    const rootPath = mkdtempSync(join(tmpdir(), 'sleuth-synth-onboarding-'));
+
+    try {
+      writeFileSync(join(rootPath, 'package.json'), JSON.stringify({ scripts: { dev: 'vite', test: 'vitest run' } }), 'utf-8');
+
+      const repoMeta: RepoMeta = { ...REPO_META, rootPath };
+
+      callWithFallback.mockImplementation(async (_providers, prompt: string) => {
+        const docType = promptDocType(prompt);
+
+        if (docType === 'onboarding') {
+          throw new Error('all providers unavailable');
+        }
+
+        return docType === 'architecture' ? VALID_ARCHITECTURE_DOC : `Generated ${docType}.`;
+      });
+
+      const result = await synthesize(SUMMARIES, repoMeta, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+
+      // Real, deterministic structure — not the old apology sentence.
+      expect(result.onboarding).toContain('src/index.ts'); // detected entry point (REPO_META.subProjects)
+      expect(result.onboarding).toContain('pnpm run dev'); // real package.json script, never guessed
+      expect(result.onboarding).toContain('pnpm run test');
+      expect(result.onboarding).toContain('src/foo.ts'); // priority-ordered file list
+      expect(result.onboarding).not.toContain('could not be produced');
+      expect(result.onboarding).not.toContain('deterministic fallback');
+
+      const fallbackEntry = auditLog.find((entry) => entry.action === 'fallback_used' && entry.detail.includes('onboarding'));
+
+      expect(fallbackEntry).toBeDefined();
+    } finally {
+      rmSync(rootPath, { recursive: true, force: true });
+    }
+  });
+
+  it('never lets a fallback template mention "fallback" or similar meta-commentary in any shipped document, recording the fact only in the audit log', async () => {
+    callWithFallback.mockImplementation(async () => {
+      throw new Error('every provider unavailable');
+    });
+
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+
+    for (const [docType, content] of Object.entries(result) as Array<[string, string]>) {
+      const lowered = content.toLowerCase();
+
+      expect(lowered, `${docType} must not mention "fallback"`).not.toContain('fallback');
+      expect(lowered, `${docType} must not mention "could not be produced"`).not.toContain('could not be produced');
+      expect(lowered, `${docType} must not mention "deterministic"`).not.toContain('deterministic');
+    }
+
+    const fallbackEntries = auditLog.filter((entry) => entry.action === 'fallback_used');
+
+    expect(fallbackEntries).toHaveLength(3);
+    expect(fallbackEntries.map((entry) => entry.detail).join(' ')).toMatch(/readme/);
+    expect(fallbackEntries.map((entry) => entry.detail).join(' ')).toMatch(/onboarding/);
+  });
+
+  it('adds no fallback_used entry and ships the LLM output verbatim when every provider succeeds', async () => {
+    callWithFallback.mockImplementation(async (_providers, prompt: string) => {
+      const docType = promptDocType(prompt);
+
+      return docType === 'architecture' ? VALID_ARCHITECTURE_DOC : `Generated ${docType} referencing \`foo\`.`;
+    });
+
+    const result = await synthesize(SUMMARIES, REPO_META, FILES, IMPORT_GRAPH, SYMBOL_INDEX, NO_PROVIDERS, NO_RATE_LIMITERS, auditLog);
+
+    expect(result.readme).toBe('Generated readme referencing `foo` [src/foo.ts:3].');
+    expect(result.onboarding).toBe('Generated onboarding referencing `foo` [src/foo.ts:3].');
+    expect(auditLog.some((entry) => entry.action === 'fallback_used')).toBe(false);
   });
 });
