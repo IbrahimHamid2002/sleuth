@@ -90,7 +90,7 @@ describe('detectEntryPoints', () => {
 describe('scoreFile', () => {
   it('applies the +30 entry-point bonus when a bootstrap signature is present', () => {
     const file: FileNode = { path: 'src/bootstrap.ts', type: 'file', size: 10 };
-    const importGraph: ImportGraph = { inDegree: new Map() };
+    const importGraph: ImportGraph = { inDegree: new Map(), edges: [] };
     const entryPoints = new Set(['src/bootstrap.ts']);
 
     const withBonus = scoreFile(file, importGraph, entryPoints);
@@ -101,7 +101,7 @@ describe('scoreFile', () => {
 
   it('caps importScore at 40 even when inDegree implies 60', () => {
     const file: FileNode = { path: 'src/shared-util.ts', type: 'file', size: 10 };
-    const importGraph: ImportGraph = { inDegree: new Map([['src/shared-util.ts', 15]]) };
+    const importGraph: ImportGraph = { inDegree: new Map([['src/shared-util.ts', 15]]), edges: [] };
 
     const score = scoreFile(file, importGraph, new Set());
 
@@ -118,7 +118,7 @@ describe('prioritizeFiles', () => {
       { path: 'src/routes/high.ts', type: 'file', size: 10 },
     ];
 
-    const importGraph: ImportGraph = { inDegree: new Map() };
+    const importGraph: ImportGraph = { inDegree: new Map(), edges: [] };
     const entryPoints = new Set<string>();
     const auditLog: AuditEntry[] = [];
 

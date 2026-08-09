@@ -60,6 +60,15 @@ export const FRAMEWORK_EXCLUDED_SCAN_DIRS = new Set([
   'e2e',
 ]);
 
+// From documentation/synthesizer.ts's deterministic ARCHITECTURE fallback —
+// how many of the most-imported files get drawn into the Component Relation
+// Graph when the real diagram is built from analysis/import-graph.ts's edges
+// instead of an LLM call.
+export const DOC_SYNTHESIS_FALLBACK_TOP_CONNECTED_FILES = 15;
+// Caps total edges rendered in that fallback diagram — a repo with a lot of
+// fan-in can otherwise produce an unreadable (and slow-to-render) diagram.
+export const DOC_SYNTHESIS_FALLBACK_MAX_GRAPH_EDGES = 40;
+
 // From analysis/import-graph.ts
 export const IMPORT_GRAPH_IMPORT_FROM_REGEX = /import\s+.*?\s+from\s+['"](.+?)['"]/g;
 export const IMPORT_GRAPH_REQUIRE_REGEX = /require\(\s*['"](.+?)['"]\s*\)/g;
@@ -169,6 +178,12 @@ export const ARCHITECTURE_REQUIRED_SECTIONS: readonly ArchitectureRequiredSectio
 export const ARCHITECTURE_LEGACY_HEADINGS = ['Frontend Component Relation Graph', 'Frontend Data Flow Chart', 'Backend Flow Chart'];
 
 // From documentation/summarizer.ts
+// The `purpose` value fallbackSummary() stamps on a file whose summarization
+// genuinely failed — shared with documentation/synthesizer.ts's deterministic
+// fallback templates so they can tell "no real summary exists for this file"
+// apart from "this file's real purpose happens to be short", instead of
+// fabricating a purpose for it.
+export const SUMMARIZER_FALLBACK_PURPOSE = 'Could not summarize';
 export const SUMMARIZER_PROMPT_VERSION = 'v1';
 export const SUMMARIZER_MAX_BATCH_FILES = 5;
 export const SUMMARIZER_MAX_BATCH_CHARS = 6000;

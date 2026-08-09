@@ -321,6 +321,66 @@ describe('callWithFallback', () => {
     );
   });
 
+  // TASK 22B: exercises the real 3-link synthesis-stage chain (Groq ->
+  // OpenRouter -> Gemini, per CLAUDE.md §1) end to end, proving
+  // callWithFallback actually invokes OpenRouter as a genuine second attempt
+  // and returns ITS response — not a fallback marker — when Groq fails.
+  it('returns OpenRouter\'s actual response (not a fallback marker) when Groq fails and OpenRouter succeeds, in the real Groq -> OpenRouter -> Gemini chain', async () => {
+    const groqComplete = vi.fn().mockRejectedValue(new Error('groq: request failed with HTTP 429'));
+    const groq: LLMProvider = { name: 'groq', complete: groqComplete };
+    const openrouterComplete = vi.fn().mockResolvedValue('a real openrouter-generated document');
+    const openrouter: LLMProvider = { name: 'openrouter', complete: openrouterComplete };
+    const geminiComplete = vi.fn().mockResolvedValue('gemini answer');
+    const gemini: LLMProvider = { name: 'gemini', complete: geminiComplete };
+
+    const result = await callWithFallback(
+      [groq, openrouter, gemini],
+      'prompt',
+      { maxTokens: 100, temperature: 0.5 },
+      new Map(),
+    );
+
+    expect(result).toBe('a real openrouter-generated document');
+    expect(groqComplete).toHaveBeenCalledTimes(1);
+    expect(openrouterComplete).toHaveBeenCalledTimes(1);
+    // Gemini is the FINAL fallback — it must never be reached once OpenRouter
+    // (the middle link) already succeeded.
+    expect(geminiComplete).toHaveBeenCalledTimes(0);
+  });
+
+  it('falls all the way to Gemini when both Groq and OpenRouter fail, in the real Groq -> OpenRouter -> Gemini chain', async () => {
+    const groq: LLMProvider = { name: 'groq', complete: vi.fn().mockRejectedValue(new Error('groq down')) };
+    const openrouter: LLMProvider = {
+      name: 'openrouter',
+      complete: vi.fn().mockRejectedValue(new Error('openrouter down')),
+    };
+    const geminiComplete = vi.fn().mockResolvedValue('gemini-generated document');
+    const gemini: LLMProvider = { name: 'gemini', complete: geminiComplete };
+
+    const result = await callWithFallback(
+      [groq, openrouter, gemini],
+      'prompt',
+      { maxTokens: 100, temperature: 0.5 },
+      new Map(),
+    );
+
+    expect(result).toBe('gemini-generated document');
+    expect(geminiComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces a clear error — never a silent fake success — when Groq, OpenRouter, and Gemini all fail', async () => {
+    const groq: LLMProvider = { name: 'groq', complete: vi.fn().mockRejectedValue(new Error('groq down')) };
+    const openrouter: LLMProvider = {
+      name: 'openrouter',
+      complete: vi.fn().mockRejectedValue(new Error('openrouter down')),
+    };
+    const gemini: LLMProvider = { name: 'gemini', complete: vi.fn().mockRejectedValue(new Error('gemini down')) };
+
+    await expect(
+      callWithFallback([groq, openrouter, gemini], 'prompt', { maxTokens: 100, temperature: 0.5 }, new Map()),
+    ).rejects.toThrow(/groq.*groq down.*openrouter.*openrouter down.*gemini.*gemini down/s);
+  });
+
   // Regression test for the Deep Dive agent's empty-first-response bug: an
   // empty (but not thrown/rejected) completion from the first provider must
   // still trigger fallback to the next one — since GroqProvider/
